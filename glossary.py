@@ -598,6 +598,7 @@ UI_AUTH_NO_API_KEY_MSG = (
     "⚠️ `FIREBASE_WEB_API_KEY` is not set. "
     "Authentication is unavailable."
 )
+UI_NEW_QUERY_BUTTON    = "🔄 שאילתה חדשה"
 UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
 
 # Mandatory instruction that follows the live data line.

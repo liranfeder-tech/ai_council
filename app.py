@@ -90,6 +90,7 @@ from glossary import (
     UI_SPINNER_STAGE1,
     UI_SPINNER_STAGE2,
     UI_SPINNER_STAGE3,
+    UI_NEW_QUERY_BUTTON,
     UI_SUBMIT_BUTTON,
     UI_TECH_LOG_TITLE,
     UI_UNVERIFIED_WARNING,
@@ -279,6 +280,8 @@ if "user" not in st.session_state:
     st.session_state.user = None   # None or {"uid": str, "email": str, "id_token": str}
 if "_auth_mode" not in st.session_state:
     st.session_state._auth_mode = UI_AUTH_LOGIN_TAB
+if "_query_counter" not in st.session_state:
+    st.session_state._query_counter = 0   # incremented on "New Query" to reset widgets
 
 
 # ---------------------------------------------------------------------------
@@ -516,11 +519,14 @@ if not st.session_state.user:
 # Main area — question input & submit button (authenticated users only)
 # ---------------------------------------------------------------------------
 
+_qkey = f"question_input_{st.session_state._query_counter}"
+_ukey = f"image_upload_{st.session_state._query_counter}"
+
 question = st.text_area(
     label=UI_ASK_LABEL,
     placeholder=UI_ASK_PLACEHOLDER,
     height=120,
-    key="question_input",
+    key=_qkey,
 )
 
 # ── Image upload (optional, multiple) ────────────────────────────────────
@@ -528,7 +534,7 @@ uploaded_files = st.file_uploader(
     UPLOAD_IMAGE_LABEL,
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True,
-    key="image_upload",
+    key=_ukey,
 )
 
 images_bytes: list = []
@@ -550,10 +556,25 @@ if uploaded_files:
             st.caption(f"_Showing first 4 of {len(uploaded_files)} images._")
 
 _can_submit = bool(question.strip()) or bool(images_bytes)
-start_button = st.button(
-    UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
-    disabled=not _can_submit,
-)
+
+if st.session_state.current_results is not None:
+    _col_submit, _col_clear = st.columns([3, 1])
+    with _col_submit:
+        start_button = st.button(
+            UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
+            disabled=not _can_submit,
+        )
+    with _col_clear:
+        if st.button(UI_NEW_QUERY_BUTTON, use_container_width=True, key="new_query_btn"):
+            st.session_state.current_results = None
+            st.session_state.from_history    = False
+            st.session_state._query_counter += 1
+            st.rerun()
+else:
+    start_button = st.button(
+        UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
+        disabled=not _can_submit,
+    )
 
 st.divider()
 
