@@ -237,13 +237,11 @@ def get_user_history(uid: str) -> list[dict]:
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
-            if entries:
-                return entries
+            return entries   # empty list is valid — user just has no history yet
         except Exception:
-            pass   # fall through to local history on any Firestore error
+            pass   # fall through on Firestore error — return empty, not global
 
-    # Fallback: local history.json (not user-scoped, but still useful)
-    return load_history()
+    return []  # Never expose other users' history as a fallback
 
 
 def check_usage_limit(uid: str) -> tuple[bool, int]:
