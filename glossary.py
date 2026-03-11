@@ -577,6 +577,7 @@ UI_STAGE0_SEARCHING    = "🔍 **שלב 0:** סריקת נתוני אמת ב-Ser
 UI_TECH_LOG_TITLE      = "פרוטוקול מחשבה טכני (למפתחים)"
 
 # ── Firebase Authentication UI strings ─────────────────────────────────────
+# v2 — cache-bust 2026-03-11
 UI_AUTH_TITLE          = "🔐 Account Access"
 UI_AUTH_LOGIN_TAB      = "Login"
 UI_AUTH_SIGNUP_TAB     = "Sign Up"
