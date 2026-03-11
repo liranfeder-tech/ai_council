@@ -21,11 +21,16 @@ debates and history replays without consuming any API tokens.
 
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 from typing import Optional
 
 load_dotenv()  # טוען את המפתחות מקובץ ה-.env
 
 import streamlit as st
+from PIL import Image
+
+_LOGO_PATH = Path(__file__).parent / "logo.png"
+_logo_img  = Image.open(_LOGO_PATH) if _LOGO_PATH.exists() else None
 
 from glossary import (
     APP_ICON,
@@ -273,7 +278,7 @@ def render_reliability_gauge(model_label: str, score: int) -> str:
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title=APP_PAGE_TITLE,
-    page_icon=APP_ICON,
+    page_icon=_logo_img if _logo_img else APP_ICON,
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -307,8 +312,16 @@ if "_force_rerun" not in st.session_state:
 # Sidebar — model selection, API info, session history
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title(f"{APP_ICON} {APP_TITLE}")
-    st.caption(APP_SUBTITLE)
+    if _logo_img:
+        col_logo, col_txt = st.columns([1, 2.5])
+        with col_logo:
+            st.image(_logo_img, width=64)
+        with col_txt:
+            st.markdown(f"### {APP_TITLE}")
+            st.caption(APP_SUBTITLE)
+    else:
+        st.title(f"{APP_ICON} {APP_TITLE}")
+        st.caption(APP_SUBTITLE)
     st.divider()
 
     # ── Authentication ────────────────────────────────────────────────────────
@@ -543,8 +556,16 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Main area — authentication gate
 # ---------------------------------------------------------------------------
-st.header(f"{APP_ICON} {APP_TITLE}")
-st.subheader(APP_SUBTITLE)
+if _logo_img:
+    _hc1, _hc2, _hc3 = st.columns([1, 8, 1])
+    with _hc1:
+        st.image(_logo_img, width=72)
+    with _hc2:
+        st.markdown(f"## {APP_TITLE}")
+        st.caption(APP_SUBTITLE)
+else:
+    st.header(f"{APP_ICON} {APP_TITLE}")
+    st.subheader(APP_SUBTITLE)
 st.write("")
 
 if not st.session_state.user:
