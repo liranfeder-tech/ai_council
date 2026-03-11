@@ -1,0 +1,15 @@
+# Secrets — never commit these
+.env
+firebase_key.json
+
+# Streamlit local secrets (if used)
+.streamlit/secrets.toml
+
+# Generated files
+pdf_cache/
+history.json
+__pycache__/
+*.pyc
+venv/
+.DS_Store
+

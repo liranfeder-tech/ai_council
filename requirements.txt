@@ -1,0 +1,22 @@
+# Council of AI Models — Python dependencies
+# Install with:  pip install -r requirements.txt
+
+# ── Core framework ────────────────────────────────────────────────────────
+streamlit>=1.35.0
+python-dotenv>=1.0.0
+requests>=2.28.0
+
+# ── AI provider SDKs ──────────────────────────────────────────────────────
+anthropic>=0.30.0
+openai>=1.30.0
+google-genai>=1.0.0
+
+# ── Search ────────────────────────────────────────────────────────────────
+google-search-results>=2.4.2
+
+# ── PDF generation & BiDi text ───────────────────────────────────────────
+fpdf2>=2.7.9
+python-bidi>=0.4.2
+
+# ── Cloud Sync (Firestore) ────────────────────────────────────────────────
+firebase-admin>=6.2.0

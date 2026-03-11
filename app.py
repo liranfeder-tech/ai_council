@@ -1,0 +1,841 @@
+"""
+app.py — Streamlit UI for the Council of AI Models
+====================================================
+Run with:
+    streamlit run app.py
+
+All UI text, model IDs, and prompts are imported from glossary.py.
+All API logic is handled by ai_factory.py via logic_engine.py.
+This file is purely about layout, widgets, and wiring.
+
+Session-state architecture
+--------------------------
+st.session_state.current_results  — the debate dict currently displayed
+                                    (None when nothing has been run yet)
+st.session_state.from_history     — True when the displayed result was
+                                    loaded from history (not a live run)
+
+This separation lets _display_results() work identically for both live
+debates and history replays without consuming any API tokens.
+"""
+
+from dotenv import load_dotenv
+import os
+import threading
+import time
+from typing import Optional
+
+load_dotenv()  # טוען את המפתחות מקובץ ה-.env
+
+import streamlit as st
+
+from glossary import (
+    APP_ICON,
+    APP_PAGE_TITLE,
+    APP_SUBTITLE,
+    APP_TITLE,
+    FALLBACK_NOTICE,
+    IMAGE_PREVIEW_HEADER,
+    MASTER_MODEL_KEY,
+    MODELS,
+    PDF_BTN_LABEL,
+    REPORT_TEMPLATE_CSS,
+    RTL_CSS,
+    STAGE_DESCRIPTIONS,
+    STAGE_LABELS,
+    UI_ASK_LABEL,
+    UI_ASK_PLACEHOLDER,
+    UPLOAD_IMAGE_LABEL,
+    UI_CITATION_VISIT,
+    UI_CITATIONS_NO_DATA,
+    UI_ERROR_PREFIX,
+    UI_EXPANDER_CRITIQUE,
+    UI_EXPANDER_INITIAL,
+    HEBREW_MONTHS,
+    HEBREW_WEEKDAYS,
+    UI_HELP_DATA_DATE_TPL,
+    UI_HELP_COUNCIL,
+    UI_HELP_EXPANDER_TITLE,
+    UI_HELP_RELIABILITY,
+    UI_HELP_TECH_APPENDIX,
+    UI_HISTORY_BANNER,
+    UI_HISTORY_CLEAR,
+    UI_HISTORY_EMPTY,
+    UI_HISTORY_GROUP_EARLIER,
+    UI_HISTORY_GROUP_OLDER,
+    UI_HISTORY_GROUP_TODAY,
+    UI_HISTORY_GROUP_YESTERDAY,
+    UI_HISTORY_PDF_BTN,
+    UI_HISTORY_TITLE,
+    UI_HISTORY_VERIFIED_BADGE,
+    UI_MASTER_MODEL_NOTE,
+    UI_NO_ANSWER,
+    UI_SECTION_CITATIONS,
+    UI_SECTION_FINAL,
+    UI_SECTION_PROCESS,
+    UI_SELECT_MODELS,
+    UI_SPINNER_STAGE1,
+    UI_SPINNER_STAGE2,
+    UI_SPINNER_STAGE3,
+    UI_SUBMIT_BUTTON,
+    UI_UNVERIFIED_WARNING,
+    UI_WARNING_MIN_MODELS,
+)
+from logic_engine import run_council_debate
+from report_generator import generate_pdf
+from history_manager import clear_history, firestore_status, load_history, save_to_history
+
+
+# ---------------------------------------------------------------------------
+# Processing-UI assets  (spinner CSS + thought-stream copy)
+# ---------------------------------------------------------------------------
+
+# Rainbow rotating ring — pure CSS, zero Python thread needed.
+_SPINNER_CSS = """
+<style>
+@keyframes council-spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes council-hue {
+    0%   { border-top-color:#ff6b6b; border-right-color:#ffd93d;
+           border-bottom-color:#6bcb77; border-left-color:#4d96ff; }
+    33%  { border-top-color:#c77dff; border-right-color:#ff6b6b;
+           border-bottom-color:#ffd93d; border-left-color:#6bcb77; }
+    66%  { border-top-color:#4d96ff; border-right-color:#c77dff;
+           border-bottom-color:#ff6b6b; border-left-color:#ffd93d; }
+    100% { border-top-color:#ff6b6b; border-right-color:#ffd93d;
+           border-bottom-color:#6bcb77; border-left-color:#4d96ff; }
+}
+.council-ring-wrap { display:flex; justify-content:center; padding:18px 0 6px; }
+.council-ring {
+    width:56px; height:56px; border-radius:50%;
+    border:6px solid transparent;
+    animation: council-spin 0.85s linear infinite,
+               council-hue  3.4s  linear infinite;
+}
+</style>
+"""
+
+_SPINNER_HTML = (
+    '<div class="council-ring-wrap">'
+    '<div class="council-ring"></div>'
+    '</div>'
+)
+
+# 10 rotating "mental activity" captions shown every ~3.5 s during processing.
+# The first two are Stage-0-specific so the user sees them early in the run.
+_THOUGHT_MSGS = [
+    "🔍 Stage 0: Fetching live silver spot price from global markets …",
+    "💱 Stage 0: Retrieving real-time USD/ILS exchange rate …",
+    "💉 Injecting verified market data into all model system prompts …",
+    "🧬 Overriding training-memory prices with live market anchor …",
+    "⚖️ Applying zero-trust factual verification across all agents …",
+    "🌐 Synthesizing intelligence from verified and conceptual sources …",
+    "🔬 Running peer-review cross-validation on expert opinions …",
+    "📊 Calibrating numerical claims against live market figures …",
+    "🧠 Applying Chain-of-Thought reasoning with live data anchor …",
+    "⚡ Assembling final expert consensus from verified sources …",
+]
+
+_THOUGHT_STYLE = (
+    "color:#64748b;font-style:italic;text-align:center;"
+    "padding:4px 0;margin:0;"
+)
+
+
+def _start_thought_stream(placeholder: "st.delta_generator.DeltaGenerator") -> threading.Event:
+    """
+    Start a background thread that cycles _THOUGHT_MSGS every ~3.5 s,
+    writing each into `placeholder`.  Returns the stop Event.
+    """
+    stop = threading.Event()
+
+    def _loop() -> None:
+        idx = 0
+        while not stop.is_set():
+            msg = _THOUGHT_MSGS[idx % len(_THOUGHT_MSGS)]
+            try:
+                placeholder.markdown(
+                    f'<p style="{_THOUGHT_STYLE}">{msg}</p>',
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+            idx += 1
+            stop.wait(3.5)     # exits immediately when stop.set() is called
+
+    threading.Thread(target=_loop, daemon=True).start()
+    return stop
+
+
+# ---------------------------------------------------------------------------
+# Page configuration (must be the first Streamlit call)
+# ---------------------------------------------------------------------------
+st.set_page_config(
+    page_title=APP_PAGE_TITLE,
+    page_icon=APP_ICON,
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "Get help":        None,
+        "Report a bug":    None,
+        "About":           f"**{APP_TITLE}** — Dual-Sided Adversarial Discussion (DSAD) "
+                           "with 4 AI models.  For research and educational use only.",
+    },
+)
+st.markdown(RTL_CSS, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Session state — initialise once per browser session
+# ---------------------------------------------------------------------------
+if "current_results" not in st.session_state:
+    st.session_state.current_results = None
+if "from_history" not in st.session_state:
+    st.session_state.from_history = False
+
+
+# ---------------------------------------------------------------------------
+# Sidebar — model selection, API info, session history
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.title(f"{APP_ICON} {APP_TITLE}")
+    st.caption(APP_SUBTITLE)
+    st.divider()
+
+    # ── Model selection ──────────────────────────────────────────────────────
+    master_label = MODELS[MASTER_MODEL_KEY]["label"]
+    st.info(UI_MASTER_MODEL_NOTE.format(label=master_label))
+
+    st.subheader(UI_SELECT_MODELS)
+    selected_keys: list[str] = []
+    for key, cfg in MODELS.items():
+        if key == MASTER_MODEL_KEY:
+            continue
+        if st.checkbox(label=cfg["label"], value=True, key=f"chk_{key}"):
+            selected_keys.append(key)
+
+    st.divider()
+    st.caption(
+        "API keys are read from environment variables:\n"
+        "- `ANTHROPIC_API_KEY`\n"
+        "- `OPENAI_API_KEY`\n"
+        "- `GOOGLE_API_KEY`\n"
+        "- `SERPER_API_KEY` _(optional — enables pre-flight live search)_"
+    )
+
+    # ── Cloud Sync status indicator ───────────────────────────────────────────
+    if firestore_status():
+        st.success("☁️ Cloud Sync Active", icon="✅")
+    else:
+        st.caption("☁️ _Cloud Sync: offline — local history only_")
+
+    # ── Help & Methodology ────────────────────────────────────────────────────
+    with st.expander(UI_HELP_EXPANDER_TITLE, expanded=False):
+        from datetime import date as _hdate
+        _hd = _hdate.today()
+        _data_date_line = UI_HELP_DATA_DATE_TPL.format(
+            day_name = HEBREW_WEEKDAYS[_hd.weekday()],
+            day      = _hd.day,
+            month    = HEBREW_MONTHS[_hd.month],
+            year     = _hd.year,
+        )
+        st.markdown(UI_HELP_COUNCIL)
+        st.markdown(UI_HELP_RELIABILITY)
+        st.markdown(UI_HELP_TECH_APPENDIX)
+        st.markdown(_data_date_line)
+
+    # ── Session history ──────────────────────────────────────────────────────
+    st.divider()
+    st.subheader(UI_HISTORY_TITLE)
+
+    history = load_history()
+
+    if not history:
+        st.caption(UI_HISTORY_EMPTY)
+    else:
+        from datetime import datetime as _sdt, date as _sdate, timedelta as _std
+        from pathlib import Path as _SPath
+
+        _today     = _sdate.today()
+        _yesterday = _today - _std(days=1)
+
+        # Bucket entries by relative date into ordered groups
+        _groups: dict[str, list] = {
+            "today":     [],
+            "yesterday": [],
+            "earlier":   [],
+            "older":     [],
+        }
+        for _i, _entry in enumerate(history):
+            # Timestamp format: "2026-03-11  14:30" (double space separator)
+            try:
+                _edate = _sdt.strptime(_entry["timestamp"].split()[0], "%Y-%m-%d").date()
+            except (ValueError, IndexError):
+                _edate = None
+
+            if _edate == _today:
+                _groups["today"].append((_i, _entry, _edate))
+            elif _edate == _yesterday:
+                _groups["yesterday"].append((_i, _entry, _edate))
+            elif (
+                _edate
+                and _edate.year  == _today.year
+                and _edate.month == _today.month
+            ):
+                _groups["earlier"].append((_i, _entry, _edate))
+            else:
+                _groups["older"].append((_i, _entry, _edate))
+
+        def _render_history_entry(idx: int, entry: dict, edate) -> None:
+            q   = entry["question"]
+            rs  = entry["results"]
+
+            # 🛡️ badge when the debate has reliability scores (consensus verified)
+            shield    = UI_HISTORY_VERIFIED_BADGE if rs.get("reliability_scores") else ""
+            short_q   = (q[:48] + "…") if len(q) > 48 else q
+            btn_label = f"{shield} {short_q}".strip()
+
+            # Human-readable date sub-text: "11 Mar 2026"
+            date_str = (
+                f"{edate.day} {edate.strftime('%b %Y')}"
+                if edate else entry["timestamp"]
+            )
+
+            # PDF quick-download: only show if the cached file still exists on disk
+            _cache    = rs.get("pdf_cache_path", "")
+            _has_pdf  = bool(_cache and _SPath(_cache).exists())
+
+            if _has_pdf:
+                _c1, _c2 = st.columns([3, 1])
+                with _c1:
+                    if st.button(btn_label, key=f"hist_{idx}", use_container_width=True):
+                        st.session_state.current_results = rs
+                        st.session_state.from_history    = True
+                        st.rerun()
+                with _c2:
+                    try:
+                        _pdf_data  = _SPath(_cache).read_bytes()
+                        _pdf_fname = (
+                            f"AI_Playground_{edate.isoformat()}.pdf"
+                            if edate else "AI_Playground_report.pdf"
+                        )
+                        st.download_button(
+                            label=UI_HISTORY_PDF_BTN,
+                            data=_pdf_data,
+                            file_name=_pdf_fname,
+                            mime="application/pdf",
+                            key=f"hist_pdf_{idx}",
+                            use_container_width=True,
+                        )
+                    except Exception:
+                        pass
+            else:
+                if st.button(btn_label, key=f"hist_{idx}", use_container_width=True):
+                    st.session_state.current_results = rs
+                    st.session_state.from_history    = True
+                    st.rerun()
+
+            st.caption(date_str)
+
+        def _render_group(group_label: str, items: list) -> None:
+            if not items:
+                return
+            st.caption(f"**{group_label}**")
+            for _gi, _ge, _gd in items:
+                _render_history_entry(_gi, _ge, _gd)
+
+        _render_group(UI_HISTORY_GROUP_TODAY,     _groups["today"])
+        _render_group(UI_HISTORY_GROUP_YESTERDAY, _groups["yesterday"])
+        _render_group(UI_HISTORY_GROUP_EARLIER,   _groups["earlier"])
+        _render_group(UI_HISTORY_GROUP_OLDER,     _groups["older"])
+
+        st.divider()
+        if st.button(UI_HISTORY_CLEAR, use_container_width=True):
+            clear_history()
+            # Only clear current view if it came from history
+            if st.session_state.from_history:
+                st.session_state.current_results = None
+                st.session_state.from_history    = False
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Main area — question input & submit button
+# ---------------------------------------------------------------------------
+st.header(f"{APP_ICON} {APP_TITLE}")
+st.subheader(APP_SUBTITLE)
+st.write("")
+
+question = st.text_area(
+    label=UI_ASK_LABEL,
+    placeholder=UI_ASK_PLACEHOLDER,
+    height=120,
+    key="question_input",
+)
+
+# ── Image upload (optional) ───────────────────────────────────────────────
+uploaded_file = st.file_uploader(
+    UPLOAD_IMAGE_LABEL,
+    type=["png", "jpg", "jpeg", "webp"],
+    key="image_upload",
+)
+
+image_bytes: Optional[bytes] = None
+image_mime:  str             = "image/jpeg"
+
+if uploaded_file is not None:
+    image_bytes = uploaded_file.getvalue()
+    image_mime  = uploaded_file.type or "image/jpeg"
+    with st.expander(IMAGE_PREVIEW_HEADER, expanded=True):
+        st.image(image_bytes, width=320)
+        st.caption(f"{uploaded_file.name}  ·  {len(image_bytes) // 1024} KB  ·  {image_mime}")
+
+start_button = st.button(UI_SUBMIT_BUTTON, type="primary", use_container_width=True)
+
+st.divider()
+
+
+# ---------------------------------------------------------------------------
+# Reliability Scorecard
+# ---------------------------------------------------------------------------
+
+class ReliabilityScorecard:
+    """
+    Calculates a 0-100 Consistency Score for one model based on how many
+    retraction phrases appear in its Stage 3 dialectic response.
+
+    Score  ≥ 80  → High Consistency  (green)
+    Score  ≥ 50  → Partial Revision  (amber)
+    Score  <  50 → Major Revision    (red)
+    """
+
+    # Phrases in English + Hebrew that signal a retraction / position change.
+    _TRIGGERS = (
+        "you are correct", "you're right", "i was wrong", "i acknowledge",
+        "i concede", "i was mistaken", "valid point", "i agree with",
+        "i must retract", "i now agree", "i stand corrected",
+        "i missed", "i overlooked", "correct to point out",
+        "אתה צודק", "טעיתי", "אני מסכים", "הערה נכונה",
+    )
+
+    _COLOURS = {
+        "high":    "#10B981",   # emerald
+        "partial": "#F59E0B",   # amber
+        "low":     "#EF4444",   # red
+    }
+
+    def __init__(self, model_key: str, dialectic_response: str) -> None:
+        self.model_key  = model_key
+        self._response  = dialectic_response.lower()
+        self.retractions: list = [t for t in self._TRIGGERS if t in self._response]
+        self.score: int = max(0, 100 - len(self.retractions) * 20)
+
+    @property
+    def _tier(self) -> str:
+        if self.score >= 80:
+            return "high"
+        if self.score >= 50:
+            return "partial"
+        return "low"
+
+    @property
+    def colour(self) -> str:
+        return self._COLOURS[self._tier]
+
+    @property
+    def label(self) -> str:
+        return {"high": "High Consistency", "partial": "Partial Revision",
+                "low": "Major Revision"}[self._tier]
+
+    def render_chip(self) -> str:
+        """Return an HTML chip for use in st.markdown(unsafe_allow_html=True)."""
+        model_label = MODELS[self.model_key]["label"]
+        # Math Aligned badge: only when the model held its position perfectly
+        # (no retractions), meaning its Stage 0 numbers were never challenged.
+        math_badge = (
+            '<span style="font-size:0.7em;font-weight:700;'
+            'background:rgba(255,255,255,0.22);border-radius:3px;'
+            'padding:1px 6px;margin-left:5px">🧮 Math Aligned</span>'
+            if self.score == 100 else ""
+        )
+        return (
+            f'<span class="scorecard-chip" style="background:{self.colour}">'
+            f'{model_label}'
+            f'<span class="scorecard-chip-score">{self.score}</span>'
+            f'<span style="font-size:0.78em;font-weight:400">{self.label}</span>'
+            f'{math_badge}'
+            f'</span>'
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — rendering
+# ---------------------------------------------------------------------------
+
+def _model_badge(model_key: str) -> str:
+    """Return an inline HTML badge coloured with the model's brand colour."""
+    cfg   = MODELS[model_key]
+    color = cfg["color"]
+    label = cfg["label"]
+    return (
+        f'<span style="background:{color};color:white;'
+        f'padding:2px 8px;border-radius:4px;font-size:0.85em">{label}</span>'
+    )
+
+
+def _render_citation_cards(citations: list[dict]) -> None:
+    """
+    3-column grid of source cards.  Falls back to a 'no data' caption
+    when grounding was not triggered.
+    """
+    st.subheader(UI_SECTION_CITATIONS)
+
+    if not citations:
+        st.caption(UI_CITATIONS_NO_DATA)
+        return
+
+    from urllib.parse import urlparse
+
+    cols_per_row = 3
+    for row_start in range(0, len(citations), cols_per_row):
+        row_items = citations[row_start : row_start + cols_per_row]
+        cols = st.columns(cols_per_row)
+
+        for col, citation in zip(cols, row_items):
+            url   = citation["url"]
+            title = citation["title"]
+            try:
+                domain = urlparse(url).netloc.lstrip("www.")
+            except Exception:
+                domain = url
+
+            with col:
+                st.markdown(
+                    f"""
+                    <div style="
+                        border:1px solid #e2e8f0;border-radius:8px;
+                        padding:14px 16px;background:#f8fafc;
+                        height:100%;min-height:90px;">
+                      <div style="font-size:.78em;color:#64748b;font-weight:600;
+                          letter-spacing:.03em;text-transform:uppercase;
+                          margin-bottom:4px">{domain}</div>
+                      <div style="font-size:.9em;color:#1e293b;font-weight:500;
+                          margin-bottom:10px;line-height:1.4">{title}</div>
+                      <a href="{url}" target="_blank" style="font-size:.82em;
+                          color:#3b82f6;text-decoration:none;font-weight:600"
+                      >{UI_CITATION_VISIT}</a>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+
+def _display_results(results: dict) -> None:
+    """
+    Render the complete results view from a results dict.
+    Called both after a live debate and when loading from history —
+    the rendering is identical in both cases.
+    """
+    import re as _re
+    from datetime import datetime as _dt
+
+    # History banner
+    if st.session_state.from_history:
+        st.info(UI_HISTORY_BANNER)
+
+    final     = results["final_answer"]
+    citations = results.get("citations", [])
+
+    # ── Certified Report container ────────────────────────────────────────────
+    st.markdown(REPORT_TEMPLATE_CSS, unsafe_allow_html=True)
+    st.subheader(UI_SECTION_FINAL)
+
+    if results.get("fallback_used"):
+        st.warning(FALLBACK_NOTICE)
+
+    report_date = _dt.now().strftime("%A, %B %d, %Y")
+    n_models    = len(results.get("answers", {}))
+
+    report_header = f"""
+<div class="council-report">
+<div class="council-report-accent"></div>
+<div class="council-report-header">
+  <div>
+    <div class="council-report-title">🎮 AI-Playground — Certified Council Report</div>
+    <div style="font-size:0.78em;color:#64748b;margin-top:3px">
+      DSAD · {n_models} agents · 4 stages
+    </div>
+  </div>
+  <div class="council-report-meta">
+    {report_date}<br>
+    <span style="font-size:0.9em">Research &amp; Educational Use Only</span>
+  </div>
+</div>
+<div class="council-report-body">
+"""
+    report_footer = """
+</div>
+<div class="council-report-footer">
+  GENERATED BY AI-PLAYGROUND COUNCIL &nbsp;·&nbsp; FOR RESEARCH &amp; EDUCATIONAL PURPOSES ONLY
+</div>
+</div>
+"""
+    if final.startswith("ERROR:"):
+        st.error(final)
+    else:
+        # Split narrative answer from the Technical Breakdown section so the
+        # breakdown can be rendered in its own distinct low-opacity container.
+        _td_match = _re.search(
+            r'(?m)^##\s*(?:📐\s*)?Technical Breakdown\b',
+            final,
+            _re.IGNORECASE,
+        )
+        if _td_match:
+            narrative_text = final[:_td_match.start()].strip()
+            breakdown_text = final[_td_match.start():].strip()
+        else:
+            narrative_text = final
+            breakdown_text = ""
+
+        st.markdown(report_header, unsafe_allow_html=True)
+        st.markdown(narrative_text)
+
+        if breakdown_text:
+            st.markdown(
+                '<div class="tech-breakdown">'
+                '<div class="tech-breakdown-header">'
+                '📐 Technical Breakdown — Verified Calculation'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(breakdown_text)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown(report_footer, unsafe_allow_html=True)
+
+    # ── Zero-Trust alert ──────────────────────────────────────────────────────
+    if not citations and not final.startswith("ERROR:") and _re.search(r"\d", final):
+        st.error(UI_UNVERIFIED_WARNING)
+
+    # ── Reliability Scorecard ─────────────────────────────────────────────────
+    dialectic          = results.get("dialectic", {})
+    reliability_scores = results.get("reliability_scores", {})
+
+    if dialectic:
+        st.markdown("#### 📊 Reliability Scorecard")
+        chips = []
+        for key in dialectic:
+            score = reliability_scores.get(key, 100)
+            sc    = ReliabilityScorecard(key, dialectic[key])
+            sc.score = score                    # use engine-computed score
+            chips.append(sc.render_chip())
+        st.markdown(
+            '<div class="scorecard-row">' + "".join(chips) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── PDF download (serve cached file if available, else regenerate) ───────
+    try:
+        from datetime import date as _date
+        from pathlib import Path as _Path
+        _cache_path = results.get("pdf_cache_path", "")
+        pdf_bytes: Optional[bytes] = None
+        if _cache_path:
+            try:
+                pdf_bytes = _Path(_cache_path).read_bytes()
+            except Exception:
+                pdf_bytes = None   # cached file missing — fall back to regen
+        if pdf_bytes is None:
+            pdf_bytes = generate_pdf(results)
+        filename = f"AI_Playground_Report_{_date.today().isoformat()}.pdf"
+        st.download_button(
+            label=PDF_BTN_LABEL,
+            data=pdf_bytes,
+            file_name=filename,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    except Exception as _err:
+        st.caption(f"_PDF export unavailable: {_err}_")
+
+    st.divider()
+
+    # ── Citation cards ───────────────────────────────────────────────────────
+    _render_citation_cards(citations)
+
+    st.divider()
+
+    # ── Full debate transcript (collapsed) ───────────────────────────────────
+    with st.expander(UI_SECTION_PROCESS, expanded=False):
+
+        # Stage 1 — Theses
+        st.markdown("### " + STAGE_LABELS[1])
+        for model_key, answer_text in results["answers"].items():
+            label = MODELS[model_key]["label"]
+            with st.expander(UI_EXPANDER_INITIAL.format(label=label), expanded=False):
+                st.markdown(_model_badge(model_key), unsafe_allow_html=True)
+                st.write("")
+                if answer_text.startswith("ERROR:"):
+                    st.error(UI_ERROR_PREFIX.format(label=label) + answer_text[7:])
+                else:
+                    st.markdown(answer_text if answer_text else UI_NO_ANSWER)
+
+        # Stage 2 — Adversarial Audits
+        if results.get("critiques"):
+            st.markdown("### " + STAGE_LABELS[2])
+            for (reviewer_key, target_key), critique_text in results["critiques"].items():
+                reviewer_label = MODELS[reviewer_key]["label"]
+                target_label   = MODELS[target_key]["label"]
+                header = UI_EXPANDER_CRITIQUE.format(
+                    label=reviewer_label, target_label=target_label
+                )
+                with st.expander(header, expanded=False):
+                    st.markdown(
+                        _model_badge(reviewer_key) + " → " + _model_badge(target_key),
+                        unsafe_allow_html=True,
+                    )
+                    st.write("")
+                    if critique_text.startswith("ERROR:"):
+                        st.error(
+                            UI_ERROR_PREFIX.format(label=reviewer_label) + critique_text[7:]
+                        )
+                    else:
+                        st.markdown(critique_text if critique_text else UI_NO_ANSWER)
+
+        # Stage 3 — Dialectic Responses
+        if dialectic:
+            st.markdown("### " + STAGE_LABELS[3])
+            for model_key, response_text in dialectic.items():
+                label = MODELS[model_key]["label"]
+                score = reliability_scores.get(model_key, 100)
+                header = f"💬 {label} — Dialectic Response  (Consistency: {score}/100)"
+                with st.expander(header, expanded=False):
+                    st.markdown(_model_badge(model_key), unsafe_allow_html=True)
+                    st.write("")
+                    if response_text.startswith("ERROR:"):
+                        st.error(UI_ERROR_PREFIX.format(label=label) + response_text[7:])
+                    else:
+                        st.markdown(response_text if response_text else UI_NO_ANSWER)
+
+
+# ---------------------------------------------------------------------------
+# Debate execution — runs only when the submit button is pressed
+# ---------------------------------------------------------------------------
+if start_button:
+    if not question.strip():
+        st.warning("Please type a question first.")
+        st.stop()
+
+    all_active_keys = list(dict.fromkeys([MASTER_MODEL_KEY] + selected_keys))
+    if len(all_active_keys) < 2:
+        st.warning(UI_WARNING_MIN_MODELS)
+        st.stop()
+
+    # ── Inject spinner CSS once ───────────────────────────────────────────────
+    st.markdown(_SPINNER_CSS, unsafe_allow_html=True)
+
+    _main_label = (
+        "👁️ Vision Council — analysing your image …"
+        if image_bytes
+        else "🤖 AI Council is deliberating …"
+    )
+
+    with st.status(_main_label, expanded=True) as status:
+
+        # Rainbow spinner (CSS animated — no Python thread required)
+        st.markdown(_SPINNER_HTML, unsafe_allow_html=True)
+
+        # Thought-stream: cycling mental-activity captions (background thread)
+        thought_ph = st.empty()
+        stop_thoughts = _start_thought_stream(thought_ph)
+
+        # ── Callbacks — cumulative step log (each call appends a new line) ───
+        # stage0_cb is called twice: fraction=0.0 (search start) and 1.0 (done)
+        # stage1-4 callbacks are called once per model/pair completion.
+        # st.markdown() is used (not st.write) so the global RTL_CSS applies
+        # correctly to Hebrew text in the log lines.
+
+        def stage0_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                st.markdown(text)
+                _lbl = "🔍 Stage 0 — Complete" if fraction >= 1.0 else "🔍 Stage 0 — searching …"
+                status.update(label=_lbl)
+            except Exception:
+                pass
+
+        def stage1_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                st.markdown(f"⚙️ **Stage 1** — {text}")
+                status.update(label="⚙️ Stage 1 — running …")
+            except Exception:
+                pass
+
+        def stage2_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                st.markdown(f"🔬 **Stage 2** — {text}")
+                status.update(label="🔬 Stage 2 — running …")
+            except Exception:
+                pass
+
+        def stage3_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                st.markdown(f"💬 **Stage 3** — {text}")
+                status.update(label="💬 Stage 3 — running …")
+            except Exception:
+                pass
+
+        def stage4_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                st.markdown(f"🏛️ **Stage 4** — {text}")
+                status.update(label="🏛️ Stage 4 — running …")
+            except Exception:
+                pass
+
+        # ── Run the full 4-stage DSAD debate ─────────────────────────────────
+        _live_results = run_council_debate(
+            active_keys=selected_keys,
+            question=question,
+            image_bytes=image_bytes,
+            image_mime=image_mime,
+            stage0_cb=stage0_cb,
+            stage1_cb=stage1_cb,
+            stage2_cb=stage2_cb,
+            stage3_cb=stage3_cb,
+            stage4_cb=stage4_cb,
+        )
+
+        # ── Tear down the thought-stream (step log lines persist) ─────────────
+        stop_thoughts.set()
+        thought_ph.empty()
+
+        status.update(
+            label="✅ Council deliberation complete — results ready!",
+            state="complete",
+            expanded=False,
+        )
+
+    # ── Persist and re-render from session state ──────────────────────────────
+    # Generate PDF once here so save_to_history can cache it to disk.
+    # The cached path is stored in session state so _display_results() serves
+    # the file directly without regenerating on the first (live-run) display.
+    _pdf_for_cache: Optional[bytes] = None
+    try:
+        _pdf_for_cache = generate_pdf(_live_results)
+    except Exception:
+        pass
+
+    _cached_path = save_to_history(_live_results, pdf_bytes=_pdf_for_cache)
+    if _cached_path:
+        _live_results["pdf_cache_path"] = _cached_path
+
+    st.session_state.current_results = _live_results
+    st.session_state.from_history    = False
+    st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Results display — driven entirely by session state so it works
+# identically for live debates and history replays
+# ---------------------------------------------------------------------------
+if st.session_state.current_results:
+    _display_results(st.session_state.current_results)

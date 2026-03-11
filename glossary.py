@@ -1,0 +1,654 @@
+"""
+glossary.py — The Single Source of Truth
+=========================================
+Every model ID, label, prompt template, and constant used across the
+application is defined here.  To add a new model, add one block to
+MODELS and the rest of the app picks it up automatically.
+"""
+
+# ---------------------------------------------------------------------------
+# App-level constants
+# ---------------------------------------------------------------------------
+APP_TITLE        = "AI-Playground"
+APP_PAGE_TITLE   = "AI-Playground | Multi-Agent Council"   # browser-tab title
+APP_SUBTITLE     = "Multiple minds. One best answer."
+APP_ICON         = "🎮"
+
+# The model that writes the final synthesised answer (must be one of the
+# MODELS keys, or any valid model ID you have access to).
+MASTER_MODEL_KEY = "claude"
+
+# Fallback model used in Stage 3 if the Master Model fails.
+# Must be a key in MODELS.
+FALLBACK_MODEL_KEY = "gemini_pro"
+FALLBACK_MODEL_ID  = "gemini-3-pro-preview"   # human-readable reference / logging
+
+
+# ---------------------------------------------------------------------------
+# Model registry
+# Every entry is a dict with:
+#   id          – the exact model string the provider API expects
+#   label       – human-readable name shown in the UI
+#   provider    – which client class the factory should use
+#   color       – hex colour for the card / expander accent
+# ---------------------------------------------------------------------------
+MODELS: dict[str, dict] = {
+    "claude": {
+        "id":       "claude-sonnet-4-6",
+        "label":    "Claude (Anthropic)",
+        "provider": "anthropic",
+        "color":    "#D97706",   # amber
+    },
+    "gpt": {
+        "id":       "gpt-4o",
+        "label":    "GPT-4o (OpenAI)",
+        "provider": "openai",
+        "color":    "#10B981",   # emerald
+    },
+    "gemini": {
+        "id":       "gemini-3-flash-preview",
+        "label":    "Gemini 3 Flash (Google)",
+        "provider": "google",
+        "color":    "#3B82F6",   # blue
+    },
+    # Dedicated entry for the Gemini 3 Pro fallback / master synthesis model
+    "gemini_pro": {
+        "id":       "gemini-3-pro-preview",
+        "label":    "Gemini 3 Pro (Google)",
+        "provider": "google",
+        "color":    "#6366F1",   # indigo
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Stage labels (used in progress bars and section headers)
+# ---------------------------------------------------------------------------
+STAGE_LABELS = {
+    1: "Stage 1 — Parallel Thesis",
+    2: "Stage 2 — Adversarial Audit",
+    3: "Stage 3 — Dialectic Response",
+    4: "Stage 4 — Consensus Synthesis",
+}
+
+STAGE_DESCRIPTIONS = {
+    1: "Each model generates an independent solution grounded in verified live data …",
+    2: "Every model performs a rigorous flaw analysis of their peers' solutions …",
+    3: "Models respond to critiques — defending correct positions or refining flawed ones …",
+    4: "The Mediator synthesises the full adversarial transcript into the Final Truth …",
+}
+
+# ---------------------------------------------------------------------------
+# Vision / multimodal constants
+# ---------------------------------------------------------------------------
+
+# Injected at the top of every prompt when the user has uploaded an image.
+# Placeholders: none — used as-is, then passed as {vision_prefix}.
+VISION_MODE_PROMPT = """\
+You are operating in **Vision Expert Mode**. An image has been provided \
+alongside the question.
+
+Your first priority is to carefully examine all visible details in the image \
+— objects, text, symbols, colours, markings, scale indicators, and any \
+contextual clues.  Use this visual evidence as your primary grounding \
+source.  Then combine your visual analysis with any live data (prices, \
+identification databases, historical records) to form the most accurate answer.
+
+"""
+
+# ---------------------------------------------------------------------------
+# System-prompt templates
+#
+# Use Python str.format(**kwargs) to fill in the placeholders.
+# ---------------------------------------------------------------------------
+
+# Stage 1 – Chain-of-Thought answer
+# The model must reason through constraints and context BEFORE writing the
+# final answer.  This structured thinking step reduces hallucination and
+# produces more accurate, well-scoped responses.
+PROMPT_INITIAL = """\
+{vision_prefix}{verified_context}You are a knowledgeable and precise assistant that reasons before answering.
+
+Follow this Chain-of-Thought structure **exactly**:
+
+## 🔍 Step 1 — Constraint Analysis
+Identify the key constraints, assumptions, and scope boundaries hidden in the \
+question.  What is the user *really* asking?  What edge cases exist?
+
+## 🌐 Step 2 — Context & Current State
+What is the most up-to-date information relevant to this question?  Note any \
+areas where knowledge may have changed recently and flag them explicitly.
+
+## 💡 Step 3 — Reasoning
+Work through the problem step by step.  Show your reasoning chain.  If \
+multiple approaches exist, compare them briefly before committing to one.
+
+## ✅ Step 4 — Final Answer
+Provide a clear, structured final answer.  Use markdown headers, bullet \
+points, and code blocks where helpful.  Be explicit about what is \
+well-established fact versus what may have changed recently.
+
+---
+
+Question:
+{question}
+"""
+
+# Stage 1-b (DSAD) — Dialectic Response
+# Each model reads the critiques directed AT THEM and must respond:
+# either defend the point with reasoning or acknowledge and refine.
+# Placeholders: {vision_prefix}, {verified_context}, {question},
+#               {your_initial_answer}, {critique_of_your_answer}
+PROMPT_DIALECTIC = """\
+{vision_prefix}{verified_context}You are a precise, intellectually honest expert \
+in a live peer-review discussion.
+
+Your initial answer has been critiqued by peer models. You must now respond to \
+each critique with intellectual honesty and the live market data provided above.
+
+--- Original Question ---
+{question}
+
+--- Your Initial Answer ---
+{your_initial_answer}
+
+--- Critiques Directed at Your Answer ---
+{critique_of_your_answer}
+
+## Response Rules
+
+For EACH critique point, choose exactly one response type:
+
+### 🛡️ DEFEND — the critique is factually wrong or based on a misreading
+Quote the exact critique sentence, then explain clearly why your original \
+answer was correct.  Cite specific reasoning.  Do not yield under pressure \
+if you are genuinely correct.
+
+### 🔄 REFINE — the critique reveals a genuine error or gap
+Quote the exact critique sentence, state "I acknowledge this flaw:", and \
+provide a specific corrected claim.  Do NOT change your entire position — \
+only revise the specific point that was wrong.
+
+## Format
+- Use `### Point N — DEFEND` or `### Point N — REFINE` headers.
+- Be concise and precise — 2-4 sentences per point.
+- Maintain all live market figures from the Verified Context Block throughout.
+"""
+
+# Stage 2 – Factual Audit + peer review
+# Placeholders: {vision_prefix}, {question}, {author_label}, {author_answer},
+#               {other_answers}
+PROMPT_CRITIQUE = """\
+{vision_prefix}{verified_context}You are a rigorous Factual Auditor and peer reviewer.
+A colleague AI model has answered the question below.
+
+--- Original Question ---
+{question}
+
+--- {author_label}'s Answer ---
+{author_answer}
+
+--- Other Models' Answers (for context) ---
+{other_answers}
+
+## Audit Tasks (complete in this exact order)
+
+### 1. Factual Audit — PRIMARY TASK
+Examine EVERY claim in {author_label}'s answer that involves a number, price, \
+date, statistic, version, specification, or any assertion about the current \
+state of the world.  For each such claim, decide:
+
+- **VERIFIED** — the answer includes an explicit live citation or URL that \
+directly supports this specific figure.
+- **UNCERTIFIED SPECULATION** — the claim is stated as fact but has no live \
+grounding source attached to it.
+
+If ANY numeric or time-sensitive claim is UNCERTIFIED SPECULATION, you MUST \
+label the answer with the tag **⚠️ UNCERTIFIED SPECULATION DETECTED** at the \
+top of your review.  List each unverified claim on its own line and state \
+"RE-VERIFICATION REQUIRED" beside it.
+
+### 2. Strengths
+What did {author_label} do well?  Note any verified, well-sourced claims.
+
+### 3. Weaknesses & Improvements
+Logical errors, missing context, unclear reasoning, or unsupported assertions.
+
+### 4. Quality Score
+Integer from 1–10.  Deduct 2 points for each UNCERTIFIED SPECULATION found. \
+One sentence of justification.
+
+Format your review with clear markdown headings.
+"""
+
+# Stage 3 – Master Sieve synthesis with Iron Rule Data Hierarchy
+# Placeholders: {vision_prefix}, {question}, {all_answers_block},
+#               {all_critiques_block}
+PROMPT_SYNTHESIS = """\
+{vision_prefix}{verified_context}You are the final judge and Master Synthesiser. \
+You must apply the Iron Rule: every factual claim in your final answer MUST \
+come from a verified, live source.  Speculation dressed as fact is worse than \
+silence.
+
+--- Original Question ---
+{question}
+
+--- Individual Model Answers ---
+{all_answers_block}
+
+--- Peer Critiques ---
+{all_critiques_block}
+
+## Iron Rule — Data Hierarchy Filter
+
+Before writing a single word of your answer, classify ALL facts from the \
+model answers into one of these three tiers:
+
+### Tier 1 — VERIFIED ✅ (Use freely, cite explicitly)
+Data that is explicitly backed by a live Google Search result with a URL \
+attached in one of the model answers.  This is your ONLY permitted source \
+for any number, price, date, statistic, version number, or any assertion \
+about the current state of the world.  Tier 1 overrides all other tiers.
+
+### Tier 2 — GENERAL LOGIC 🔵 (Use with a disclosure label)
+Conceptual explanations, reasoning frameworks, best practices, and advice \
+that does not depend on real-time facts (e.g. "SQL is ACID-compliant by \
+design").  Label each Tier 2 block with "✅ Established principle:" so the \
+reader knows it is stable knowledge, not a live figure.
+
+### Tier 3 — DISCARD 🚫 (Omit entirely — do NOT soften or reframe)
+Any number, price, date, percentage, specification, ranking, or current-state \
+claim that a model stated WITHOUT attaching a live citation. \
+Do NOT include Tier 3 data in your answer under any circumstances. \
+Do NOT paraphrase it.  Do NOT say "approximately".  Simply omit it and \
+replace it with the explicit phrase: \
+"⚠️ No verified live data was found for [specific topic]."
+
+## Output Format
+
+1. **Executive Summary** (2-3 sentences): The core answer using only \
+Tier 1 and Tier 2 data.
+2. **Best Answer**: Full structured response.  For every topic where only \
+Tier 3 data existed, include the explicit "⚠️ No verified live data" notice. \
+Use markdown headers, bullet points, and code blocks where appropriate.
+3. **Verification Status**: List every Tier 1 citation used with its URL. \
+If no Tier 1 citations exist, write: \
+"⚠️ No real-time grounding data was available. All numeric and time-sensitive \
+claims have been omitted from this answer to prevent unverified speculation."
+4. **Confidence Note**: One paragraph on remaining uncertainties and which \
+parts of this answer are most likely to become outdated.
+
+Do NOT mention individual model names in the final answer — present it as a \
+unified, authoritative response.
+"""
+
+# Stage 4 — DSAD Consensus Synthesis
+# Mediator reviews the full adversarial transcript (Theses + Audits + Dialectic).
+# Placeholders: {vision_prefix}, {verified_context}, {question},
+#               {all_answers_block}, {all_critiques_block}, {all_dialectic_block},
+#               {silver_price}, {exchange_rate}
+COUNCIL_CONSENSUS_PROMPT = """\
+{vision_prefix}{verified_context}You are the impartial Mediator of the AI Council. \
+You are NOT one of the debating agents.  You have observed the complete \
+Dual-Sided Adversarial Discussion (DSAD) below and must now extract the \
+verified truth from it.
+
+--- Original Question ---
+{question}
+
+--- Stage 1: Initial Expert Theses ---
+{all_answers_block}
+
+--- Stage 2: Adversarial Critiques ---
+{all_critiques_block}
+
+--- Stage 3: Dialectic Responses (Defense & Refinement) ---
+{all_dialectic_block}
+
+## Consensus Protocol
+
+### Step 1 — Map Convergence
+Identify every claim ALL models ultimately agreed upon after the dialectic. \
+These are the most reliable truths — highlight them explicitly.
+
+### Step 2 — Apply Iron Rule Data Hierarchy
+- **Tier 1 ✅ VERIFIED** — Data backed by live citations from the Verified \
+Context Block (highest priority).
+- **Tier 2 🔵 GENERAL LOGIC** — Conceptual reasoning independent of \
+real-time facts.  Label each with "✅ Established principle:".
+- **Tier 3 🚫 DISCARD** — Any numeric/factual claim without a live citation. \
+Replace with: "⚠️ No verified live data found for [topic]."
+
+### Step 3 — Write the Certified Answer
+Use ONLY Tier 1 and Tier 2 data.  For every topic where only Tier 3 data \
+existed, write the explicit "⚠️ No verified live data" notice.
+
+### Step 4 — Technical Breakdown (mandatory for price evaluations)
+If the question involves ANY coin, metal, asset, or commodity valuation, you \
+MUST produce a **Technical Breakdown** section.  The following Stage 0 values \
+are the ONLY permitted inputs for all arithmetic — do NOT substitute any \
+training-memory figure:
+
+- **Silver spot price (Stage 0):** {silver_price}
+- **USD/ILS exchange rate (Stage 0):** {exchange_rate}
+
+Apply this exact calculation formula, substituting the actual numbers:
+
+> **נוסחת החישוב:**
+> [משקל נקי בגרם] / 31.1 × {silver_price} × {exchange_rate} + [פרמיית אספנות]
+
+Show every arithmetic step explicitly (weight → troy-oz → USD → ILS → \
++ premium) so the user can verify the result independently.  End the section \
+with the line: "✅ Calculation grounded exclusively in Stage 0 live data."
+
+## Output Format
+
+1. **Consensus Points** — What all models agreed on after the dialectic.
+2. **Contested Points** — Where genuine disagreement remained and why.
+3. **Final Certified Answer** — Synthesised truth using only verified data.
+4. **Verification Status** — List every Tier 1 citation with its URL. If none, \
+write: "⚠️ No real-time grounding data was available. All numeric claims omitted."
+5. **Confidence Note** — One paragraph on remaining uncertainties.
+6. **Technical Breakdown** _(required when price or commodity evaluation is \
+present)_ — Use the exact markdown header `## Technical Breakdown`.  Substitute \
+the Stage 0 values {silver_price} and {exchange_rate} into the formula, show \
+each arithmetic step, and close the section with: \
+"✅ Calculation grounded exclusively in Stage 0 live data."
+
+Do NOT attribute claims to individual models.  Present as a single, \
+authoritative, certified response.
+"""
+
+# ---------------------------------------------------------------------------
+# Certified-report display
+# ---------------------------------------------------------------------------
+
+# CSS for the "Certified Report" container that wraps the final answer.
+# RTL-aware, high-end document styling with a rainbow top-bar accent.
+REPORT_TEMPLATE_CSS = """
+<style>
+/* ── Certified Report card ───────────────────────────────────────────── */
+.council-report {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow:
+        0 4px 24px rgba(0,0,0,0.07),
+        0 1px 4px  rgba(0,0,0,0.04);
+    padding: 0;
+    margin: 8px 0 24px;
+    overflow: hidden;
+    font-family: 'Georgia', serif;
+}
+/* Rainbow top-bar accent */
+.council-report-accent {
+    height: 5px;
+    background: linear-gradient(
+        90deg,
+        #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c77dff, #ff6b6b
+    );
+}
+.council-report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 20px 28px 16px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.council-report-title {
+    font-size: 1.05em;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 0.02em;
+}
+.council-report-meta {
+    font-size: 0.76em;
+    color: #64748b;
+    line-height: 1.7;
+    text-align: right;
+}
+.council-report-body {
+    padding: 20px 28px;
+    font-size: 0.97em;
+    line-height: 1.85;
+    color: #1e293b;
+}
+.council-report-footer {
+    padding: 10px 28px 14px;
+    border-top: 1px solid #f1f5f9;
+    font-size: 0.72em;
+    color: #94a3b8;
+    text-align: center;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ── Reliability Scorecard ──────────────────────────────────────────── */
+.scorecard-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 8px 0 20px;
+}
+.scorecard-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    font-size: 0.82em;
+    font-weight: 600;
+    color: #ffffff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+.scorecard-chip-score {
+    font-size: 1.1em;
+    font-weight: 800;
+}
+
+/* ── Technical Breakdown sub-container ──────────────────────────────── */
+.tech-breakdown {
+    background: rgba(241, 245, 249, 0.88);
+    border: 1px dashed #94a3b8;
+    border-radius: 8px;
+    padding: 16px 22px;
+    margin: 16px 28px 20px;
+    font-size: 0.92em;
+    line-height: 1.75;
+    color: #334155;
+}
+.tech-breakdown-header {
+    font-size: 0.76em;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 6px;
+}
+.tech-formula {
+    direction: rtl;
+    text-align: right;
+    unicode-bidi: embed;
+    background: #eff6ff;
+    border-left: 3px solid #3b82f6;
+    padding: 8px 14px;
+    border-radius: 4px;
+    margin: 8px 0;
+    color: #1e40af;
+    font-weight: 600;
+    font-size: 1.0em;
+}
+</style>
+"""
+
+# ---------------------------------------------------------------------------
+# UI string constants
+# ---------------------------------------------------------------------------
+UI_SELECT_MODELS      = "Select models for the debate:"
+UI_MASTER_MODEL_NOTE  = "**Master Model (always active):** {label} — writes the final answer."
+UI_ASK_LABEL          = "Your Question"
+UI_ASK_PLACEHOLDER    = "e.g. What are the trade-offs between SQL and NoSQL databases?"
+UI_SUBMIT_BUTTON      = "Start the Council Debate"
+UI_SPINNER_STAGE1     = "Gathering independent answers …"
+SEARCHING_LIVE_DATA_MSG = "🔍 Running pre-flight live market search …"
+UI_SPINNER_STAGE2     = "Running peer review …"
+UI_SPINNER_STAGE3     = "Synthesising the final answer …"
+UI_SECTION_FINAL      = "🏆 Final Synthesised Answer"
+UI_SECTION_PROCESS    = "🔍 Show the full debate transcript"
+UI_EXPANDER_INITIAL   = "📝 {label} — Initial Answer"
+UI_EXPANDER_CRITIQUE  = "🔬 {label} — Critique of {target_label}"
+UI_WARNING_MIN_MODELS = "Please select at least one model in addition to the Master Model."
+UI_ERROR_PREFIX       = "⚠️ Error from {label}: "
+UI_NO_ANSWER          = "_No answer returned._"
+FALLBACK_NOTICE       = "⚠️ Primary Master Model failed. Using Gemini 3 Pro as fallback."
+UI_UNVERIFIED_WARNING = (
+    "⛔ Zero-Trust Alert: This answer contains numeric or factual claims but no "
+    "live citations were retrieved from Google Search. Figures, prices, dates, and "
+    "statistics may be outdated or fabricated by the model's training memory. "
+    "Treat all numbers in this response as UNCONFIRMED until independently verified."
+)
+
+# ── Stage 0 injection constants ───────────────────────────────────────────
+# Used in logic_engine.py to build the verified_context block prepended to
+# every model prompt when live market data is detected.
+
+# ── Temporal Authority Clause ──────────────────────────────────────────────
+# Injected at the TOP of verified_context when Stage 0 live data is present.
+# Overrides any model tendency to treat live market data as hypothetical.
+# Placeholders: {current_date}, {silver_price}, {exchange_rate}
+TEMPORAL_AUTHORITY_CLAUSE = """\
+╔══════════════════════════════════════════════════════════════════╗
+║      SYSTEM OVERRIDE — TEMPORAL AUTHORITY DECLARATION           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  You are operating on: {current_date}                           ║
+║                                                                  ║
+║  The market figures below are NOT hypothetical.                 ║
+║  They are LIVE, VERIFIED data from Serper.dev —                 ║
+║  retrieved seconds before this session started.                 ║
+║                                                                  ║
+║  Silver spot price  : {silver_price}   ← LIVE — use exclusively ║
+║  USD/ILS rate       : {exchange_rate}  ← LIVE — use exclusively ║
+║                                                                  ║
+║  ⛔ Your training-memory metal prices are OUTDATED.             ║
+║  ⛔ Using training-memory figures = factual error.              ║
+║  ⛔ Calling Stage 0 data "hypothetical", "unconfirmed", or      ║
+║     "assumed" = Contextual Hallucination → score penalty.       ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+# Label wrapping the raw Serper.dev output block inside verified_context.
+STAGE0_LIVE_LABEL = "━━━ [LIVE SEARCH DATA — VERIFIED via Serper.dev] ━━━"
+
+# Phrases in Stage 3 dialectic responses that signal the model treated
+# Stage 0 live data as hypothetical / unverified.  Each match deducts
+# 40 points from the reliability score (separate from retraction deductions).
+CONTEXTUAL_HALLUCINATION_TRIGGERS: tuple = (
+    "hypothetical", "if the price is correct", "unconfirmed price",
+    "cannot verify the", "i cannot confirm", "assumed values",
+    "for the sake of argument", "if the data is accurate",
+    "assuming this data is correct", "treating as given",
+    "if we assume the price", "if these values are real",
+    "if the stage 0", "taking stage 0 at face value",
+    "cannot confirm the stage 0", "if the provided price",
+    "taking the provided", "if the figure is",
+)
+
+# ── Stage 0 progress UI strings ────────────────────────────────────────────
+UI_STAGE0_SEARCHING    = "🔍 **שלב 0:** סריקת נתוני אמת ב-Serper.dev..."
+UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
+
+# Mandatory instruction that follows the live data line.
+# Written to be maximally unambiguous: discard training memory for prices.
+STAGE0_MARKET_INSTRUCTION = (
+    "MANDATORY INSTRUCTION — DO NOT SKIP:\n"
+    "The market figures shown above were retrieved via live web search moments "
+    "before this conversation began.  They reflect the CURRENT real-world values.\n"
+    "Your training data contains OUTDATED price information.  You MUST:\n"
+    "  1. Use the live figures above for EVERY calculation, estimate, and reference.\n"
+    "  2. IGNORE any conflicting prices or exchange rates stored in your training.\n"
+    "  3. Never substitute a training-memory figure for any value already listed above.\n"
+    "Failure to follow this instruction will produce a factually incorrect answer."
+)
+
+# Educational framing prepended when financial/numismatic content is detected.
+# Purpose: prevents GPT-4o content-policy refusals that trigger on direct
+# financial-advice framing, by reframing the task as academic research.
+EDUCATIONAL_FRAMING_NOTE = (
+    "PLATFORM CONTEXT (read before answering):\n"
+    "This is an academic numismatic research and market-education platform. "
+    "All valuations, price analyses, and market data provided here are strictly "
+    "for RESEARCH, EDUCATIONAL, and INFORMATIONAL purposes.  Nothing in this "
+    "conversation constitutes financial, investment, or legal advice.  Treat this "
+    "as a scholarly analysis task, not a financial consultation."
+)
+UI_SECTION_CITATIONS  = "📚 Verified Sources & References"
+UI_CITATIONS_NO_DATA  = ("ℹ️ Note: This response was generated based on model knowledge "
+                         "and logical synthesis. No real-time grounding data was retrieved.")
+UI_CITATION_VISIT     = "Visit Source →"
+PDF_REPORT_TITLE      = "AI-Playground Research Report"
+PDF_BTN_LABEL         = "📥 הורדת דוח מחקר (PDF)"
+PDF_GENERATED_BY      = "Generated by AI-Playground Council"
+
+# PDF rendering colours for the Technical Breakdown box.
+# These mirror the .tech-breakdown CSS class so the downloaded PDF visually
+# matches the on-screen Certified Report.  Used exclusively by report_generator.py.
+PDF_TECH_BREAKDOWN_BG     = (241, 245, 249)   # slate-100  ← .tech-breakdown background
+PDF_TECH_BREAKDOWN_BORDER = (148, 163, 184)   # slate-400  ← .tech-breakdown border
+PDF_TECH_BREAKDOWN_LABEL  = "Technical Breakdown — Verified Calculation"
+UI_HISTORY_TITLE           = "📜 Previous Debates"
+UI_HISTORY_EMPTY           = "No history found."
+UI_HISTORY_CLEAR           = "🗑️ Clear History"
+UI_HISTORY_BANNER          = "🕐 Viewing a saved debate — no API tokens consumed."
+UI_HISTORY_GROUP_TODAY     = "Today"
+UI_HISTORY_GROUP_YESTERDAY = "Yesterday"
+UI_HISTORY_GROUP_EARLIER   = "Earlier This Month"
+UI_HISTORY_GROUP_OLDER     = "Older"
+UI_HISTORY_VERIFIED_BADGE  = "🛡️"
+UI_HISTORY_PDF_BTN         = "📥 PDF"
+
+# ── Help & Methodology sidebar section ────────────────────────────────────
+UI_HELP_EXPANDER_TITLE = 'כיצד לקרוא את הדו"ח?'
+UI_HELP_COUNCIL        = "**המועצה:** שימוש ב-4 מודלים שונים לביקורת צולבת."
+UI_HELP_RELIABILITY    = (
+    "**מדד האמינות:** ציון 100% (ירוק) אומר שהמודל נצמד לנתוני "
+    "האמת של Stage 0 ולא הסתמך על זיכרון אימון."
+)
+UI_HELP_TECH_APPENDIX  = (
+    "**הנספח הטכני:** כל חישוב מגובה בנוסחה שקופה הניתנת לאימות עצמאי."
+)
+UI_HELP_DATA_DATE_TPL  = "**תאריך עדכון:** הנתונים מעודכנים ל{day_name}, {day} ב{month} {year}."
+
+# Hebrew localisation tables used to render UI_HELP_DATA_DATE_TPL.
+# weekday() → 0=Mon … 6=Sun
+HEBREW_WEEKDAYS = [
+    "יום שני", "יום שלישי", "יום רביעי", "יום חמישי",
+    "יום שישי", "יום שבת", "יום ראשון",
+]
+HEBREW_MONTHS = [
+    "", "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+    "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
+]
+UPLOAD_IMAGE_LABEL    = "📷 Upload an image for visual analysis (optional)"
+IMAGE_PREVIEW_HEADER  = "📷 Image Preview"
+RTL_CSS               = """
+<style>
+/* ── RTL / BiDi layout fix for AI-Playground ─────────────────────────── */
+/* Paragraphs, list items, and headings follow their natural text direction */
+.stMarkdown p,
+.stMarkdown li,
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
+    direction: rtl;
+    text-align: right;
+    unicode-bidi: embed;
+}
+/* Code blocks and inline code stay strictly LTR */
+.stMarkdown pre,
+.stMarkdown code,
+.stMarkdown .highlight {
+    direction: ltr !important;
+    text-align: left !important;
+    unicode-bidi: isolate;
+}
+</style>
+"""
