@@ -418,12 +418,18 @@ with st.sidebar:
         st.markdown(UI_HELP_TECH_APPENDIX)
         st.markdown(_data_date_line)
 
-    # ── Session history ──────────────────────────────────────────────────────
+    # ── Session history — only for authenticated users ────────────────────────
     st.divider()
     st.subheader(UI_HISTORY_TITLE)
 
-    _uid     = (st.session_state.user or {}).get("uid")
-    history  = get_user_history(_uid) if _uid else load_history()
+    _uid = (st.session_state.user or {}).get("uid")
+
+    if not _uid:
+        # Not logged in — show nothing; each user sees only their own history
+        st.caption(UI_HISTORY_EMPTY)
+        history = []
+    else:
+        history = get_user_history(_uid)
 
     if not history:
         st.caption(UI_HISTORY_EMPTY)
