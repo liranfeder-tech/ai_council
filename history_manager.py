@@ -47,9 +47,11 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, date as _date
 from pathlib import Path
 from typing import Any, Optional
+
+from glossary import DAILY_QUERY_LIMIT
 
 HISTORY_FILE  = Path(__file__).parent / "history.json"
 PDF_CACHE_DIR = Path(__file__).parent / "pdf_cache"   # cached PDFs for history replay
@@ -242,6 +244,74 @@ def get_user_history(uid: str) -> list[dict]:
 
     # Fallback: local history.json (not user-scoped, but still useful)
     return load_history()
+
+
+def check_usage_limit(uid: str) -> tuple[bool, int]:
+    """
+    Atomically check and increment the daily query counter for a user.
+
+    Firestore path: usage_stats/{uid}/daily/{YYYY-MM-DD}
+    Document fields: {"count": int, "uid": str, "date": str}
+
+    Returns
+    -------
+    (allowed, new_count)
+        allowed   — True when the user is under the daily cap; False when reached.
+        new_count — The counter value after this call (or current value when blocked).
+
+    Fails open: returns (True, 0) when Firestore is unavailable so the app
+    never blocks users due to a cloud connectivity issue.
+    """
+    db = _get_firestore()
+    if db is None:
+        return True, 0
+
+    today = _date.today().isoformat()
+    try:
+        ref = (
+            db.collection("usage_stats")
+            .document(uid)
+            .collection("daily")
+            .document(today)
+        )
+        doc = ref.get()
+        current = (doc.get("count") or 0) if doc.exists else 0
+
+        if current >= DAILY_QUERY_LIMIT:
+            return False, current
+
+        if doc.exists:
+            from firebase_admin import firestore as _fs
+            ref.update({"count": _fs.Increment(1)})
+        else:
+            ref.set({"count": 1, "uid": uid, "date": today})
+
+        return True, current + 1
+    except Exception:
+        return True, 0   # fail open — never block on Firestore errors
+
+
+def get_usage_count(uid: str) -> int:
+    """
+    Return today's query count for a user without modifying it.
+    Used for sidebar display.  Returns 0 on any error or when Firestore is absent.
+    """
+    db = _get_firestore()
+    if db is None:
+        return 0
+
+    today = _date.today().isoformat()
+    try:
+        doc = (
+            db.collection("usage_stats")
+            .document(uid)
+            .collection("daily")
+            .document(today)
+            .get()
+        )
+        return (doc.get("count") or 0) if doc.exists else 0
+    except Exception:
+        return 0
 
 
 def firestore_status() -> bool:

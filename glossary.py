@@ -604,6 +604,18 @@ UI_CACHE_HIT_BANNER    = (
     "(חיסכון בעלויות). לחץ **🔄 שאילתה חדשה** ואז **{btn}** כדי להריץ שאילתה רענן."
 )
 UI_CACHE_RERUN_BTN     = "▶️ הרץ בכל זאת (API)"
+
+# ── Daily usage quota ────────────────────────────────────────────────────────
+DAILY_QUERY_LIMIT      = 5
+UI_DAILY_USAGE_TPL     = "📊 שימוש יומי: {count}/{limit} שאילתות"
+UI_QUOTA_REACHED       = "🚀 הגעת למכסה היומית שלך. נתראה מחר!"
+
+# ── Email verification ───────────────────────────────────────────────────────
+UI_EMAIL_NOT_VERIFIED  = "📧 נא לאמת את כתובת המייל שלך כדי להמשיך."
+UI_RESEND_VERIFICATION = "📨 שלח מייל אימות מחדש"
+UI_RESEND_SUCCESS      = "✅ מייל אימות נשלח! בדוק את תיבת הדואר שלך."
+UI_REFRESH_VERIFY_BTN  = "🔄 אימתתי — רענן סטטוס"
+UI_STILL_NOT_VERIFIED  = "⚠️ המייל עדיין לא אומת. בדוק את תיבת הדואר ולחץ על הקישור."
 UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
 
 # Mandatory instruction that follows the live data line.

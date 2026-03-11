@@ -92,7 +92,15 @@ from glossary import (
     UI_SPINNER_STAGE3,
     UI_CACHE_HIT_BANNER,
     UI_CACHE_RERUN_BTN,
+    DAILY_QUERY_LIMIT,
+    UI_DAILY_USAGE_TPL,
+    UI_EMAIL_NOT_VERIFIED,
     UI_NEW_QUERY_BUTTON,
+    UI_QUOTA_REACHED,
+    UI_REFRESH_VERIFY_BTN,
+    UI_RESEND_SUCCESS,
+    UI_RESEND_VERIFICATION,
+    UI_STILL_NOT_VERIFIED,
     UI_SUBMIT_BUTTON,
     UI_TECH_LOG_TITLE,
     UI_UNVERIFIED_WARNING,
@@ -101,13 +109,20 @@ from glossary import (
 from logic_engine import run_council_debate
 from report_generator import generate_pdf
 from history_manager import (
+    check_usage_limit,
     clear_history,
     firestore_status,
+    get_usage_count,
     get_user_history,
     load_history,
     save_to_history,
 )
-from auth_manager import sign_in, sign_up
+from auth_manager import (
+    get_email_verified,
+    send_verification_email,
+    sign_in,
+    sign_up,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +392,17 @@ with st.sidebar:
     else:
         st.caption("☁️ _Cloud Sync: offline — local history only_")
 
+    # ── Daily usage quota ─────────────────────────────────────────────────────
+    _sb_uid = (st.session_state.user or {}).get("uid")
+    _usage_today = get_usage_count(_sb_uid) if _sb_uid else 0
+    _quota_reached = _usage_today >= DAILY_QUERY_LIMIT
+    if _sb_uid:
+        st.divider()
+        st.progress(min(_usage_today / DAILY_QUERY_LIMIT, 1.0))
+        st.caption(UI_DAILY_USAGE_TPL.format(count=_usage_today, limit=DAILY_QUERY_LIMIT))
+        if _quota_reached:
+            st.warning(UI_QUOTA_REACHED)
+
     # ── Help & Methodology ────────────────────────────────────────────────────
     with st.expander(UI_HELP_EXPANDER_TITLE, expanded=False):
         from datetime import date as _hdate
@@ -519,6 +545,31 @@ if not st.session_state.user:
     st.info(UI_AUTH_GATE_MSG)
     st.stop()
 
+# ── Email verification gate ───────────────────────────────────────────────
+_current_user = st.session_state.user
+if not _current_user.get("email_verified", False):
+    st.warning(UI_EMAIL_NOT_VERIFIED)
+    _id_tok = _current_user.get("id_token", "")
+    _vcol1, _vcol2 = st.columns(2)
+    with _vcol1:
+        if st.button(UI_RESEND_VERIFICATION, use_container_width=True):
+            _vresult = send_verification_email(_id_tok)
+            if _vresult is True:
+                st.success(UI_RESEND_SUCCESS)
+            else:
+                st.error(_vresult)
+    with _vcol2:
+        if st.button(UI_REFRESH_VERIFY_BTN, use_container_width=True):
+            _vcheck = get_email_verified(_id_tok)
+            if _vcheck is True:
+                st.session_state.user["email_verified"] = True
+                st.rerun()
+            elif _vcheck is False:
+                st.warning(UI_STILL_NOT_VERIFIED)
+            else:
+                st.error(_vcheck)   # error string from API
+    st.stop()
+
 # ---------------------------------------------------------------------------
 # Main area — question input & submit button (authenticated users only)
 # ---------------------------------------------------------------------------
@@ -559,7 +610,7 @@ if uploaded_files:
         if len(uploaded_files) > 4:
             st.caption(f"_Showing first 4 of {len(uploaded_files)} images._")
 
-_can_submit = bool(question.strip()) or bool(images_bytes)
+_can_submit = (bool(question.strip()) or bool(images_bytes)) and not _quota_reached
 
 if st.session_state.current_results is not None:
     _col_submit, _col_clear = st.columns([3, 1])
@@ -942,6 +993,14 @@ if start_button:
 
     # Reset force-rerun flag for next cycle
     st.session_state._force_rerun = False
+
+    # ── Usage limit check (server-side gate via Firestore) ────────────────────
+    _uid_limit = (st.session_state.user or {}).get("uid")
+    if _uid_limit:
+        _allowed, _new_count = check_usage_limit(_uid_limit)
+        if not _allowed:
+            st.warning(UI_QUOTA_REACHED)
+            st.stop()
 
     # ── Inject CSS (spinner ring + mission control dashboard) ────────────────
     st.markdown(_SPINNER_CSS + MISSION_CONTROL_CSS, unsafe_allow_html=True)

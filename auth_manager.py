@@ -28,8 +28,10 @@ from typing import Union
 import requests
 
 # Firebase Identity Toolkit REST endpoints
-_SIGN_IN_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
-_SIGN_UP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
+_SIGN_IN_URL        = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+_SIGN_UP_URL        = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
+_SEND_OOB_URL       = "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode"
+_LOOKUP_URL         = "https://identitytoolkit.googleapis.com/v1/accounts:lookup"
 
 # Map Firebase error codes → user-friendly messages
 _FIREBASE_ERRORS: dict[str, str] = {
@@ -44,7 +46,7 @@ _FIREBASE_ERRORS: dict[str, str] = {
     "MISSING_PASSWORD":             "Please enter a password.",
 }
 
-UserInfo = dict  # {"uid": str, "email": str, "id_token": str}
+UserInfo = dict  # {"uid": str, "email": str, "id_token": str, "email_verified": bool}
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +75,10 @@ def _post(url: str, payload: dict) -> Union[UserInfo, str]:
         if resp.ok:
             data = resp.json()
             return {
-                "uid":      data["localId"],
-                "email":    data["email"],
-                "id_token": data["idToken"],
+                "uid":            data["localId"],
+                "email":          data["email"],
+                "id_token":       data["idToken"],
+                "email_verified": data.get("emailVerified", False),
             }
         return _parse_error(resp)
     except requests.RequestException as exc:
@@ -101,10 +104,61 @@ def sign_in(email: str, password: str) -> Union[UserInfo, str]:
 def sign_up(email: str, password: str) -> Union[UserInfo, str]:
     """
     Create a new account with email + password.
+    Automatically sends a verification email on success.
 
     Returns a user dict on success or an error string on failure.
     """
-    return _post(
+    result = _post(
         _SIGN_UP_URL,
         {"email": email, "password": password, "returnSecureToken": True},
     )
+    if isinstance(result, dict):
+        # Best-effort — never let this block the sign-up response
+        send_verification_email(result["id_token"])
+    return result
+
+
+def send_verification_email(id_token: str) -> Union[bool, str]:
+    """
+    Send a verification email to the currently signed-in user.
+
+    Returns True on success or an error string on failure.
+    """
+    key = _api_key()
+    if not key:
+        return "FIREBASE_WEB_API_KEY is not set."
+    try:
+        resp = requests.post(
+            f"{_SEND_OOB_URL}?key={key}",
+            json={"requestType": "VERIFY_EMAIL", "idToken": id_token},
+            timeout=10,
+        )
+        return True if resp.ok else _parse_error(resp)
+    except requests.RequestException as exc:
+        return f"Network error: {exc}"
+
+
+def get_email_verified(id_token: str) -> Union[bool, str]:
+    """
+    Re-fetch the emailVerified flag from Firebase for the current user.
+    Used by the 'I've verified — refresh status' button.
+
+    Returns True/False on success or an error string on failure.
+    """
+    key = _api_key()
+    if not key:
+        return "FIREBASE_WEB_API_KEY is not set."
+    try:
+        resp = requests.post(
+            f"{_LOOKUP_URL}?key={key}",
+            json={"idToken": id_token},
+            timeout=10,
+        )
+        if resp.ok:
+            users = resp.json().get("users", [])
+            if users:
+                return bool(users[0].get("emailVerified", False))
+            return False
+        return _parse_error(resp)
+    except requests.RequestException as exc:
+        return f"Network error: {exc}"
