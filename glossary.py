@@ -9,10 +9,10 @@ MODELS and the rest of the app picks it up automatically.
 # ---------------------------------------------------------------------------
 # App-level constants
 # ---------------------------------------------------------------------------
-APP_TITLE        = "AI-Playground"
-APP_PAGE_TITLE   = "AI-Playground | Multi-Agent Council"   # browser-tab title
+APP_TITLE        = "AI Council"
+APP_PAGE_TITLE   = "AI Council | Multi-Agent Debate"   # browser-tab title
 APP_SUBTITLE     = "Multiple minds. One best answer."
-APP_ICON         = "🎮"
+APP_ICON         = "🏛️"
 
 # The model that writes the final synthesised answer (must be one of the
 # MODELS keys, or any valid model ID you have access to).
