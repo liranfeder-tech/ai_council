@@ -34,6 +34,7 @@ Dependencies
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import re
 from datetime import datetime
@@ -330,24 +331,60 @@ def get_live_context(question: str) -> str:
     return f"VERIFIED MARKET DATA ({date_str}): {', '.join(data_parts)}"
 
 
+def _plan_queries_with_ai(question: str) -> List[str]:
+    """
+    Use Gemini Flash to generate targeted English search queries for any
+    question.  This is the "query planning" step: instead of relying solely
+    on hardcoded keyword matching, we let a fast model determine what facts
+    need to be looked up before the debate begins.
+
+    Returns up to 4 English queries, or [] if the model call fails.
+    Runs in ~1-2 s and degrades gracefully on any error.
+    """
+    if not search_is_available():
+        return []
+    try:
+        from ai_factory import call_model        # local import avoids circular dep at module load
+        prompt = (
+            "You are a search-query planner for a research assistant.\n"
+            "Given the question below, output exactly 4 Google search queries "
+            "in English that would retrieve the most current, factual information "
+            "needed to answer it.\n\n"
+            "Rules:\n"
+            "- Output ONLY 4 queries, one per line — no numbers, no bullets, "
+            "no explanation.\n"
+            "- Write every query in English, even if the question is in Hebrew.\n"
+            "- Prefer queries that return recent news or current data "
+            "(append the year when relevant).\n"
+            "- Cover different angles: e.g. geopolitical status, market data, "
+            "expert analysis, latest developments.\n\n"
+            f"Question: {question[:500]}"
+        )
+        raw = call_model("gemini", prompt, [], [])
+        queries = [
+            line.strip()
+            for line in raw.strip().splitlines()
+            if line.strip() and len(line.strip()) > 8
+        ]
+        return queries[:4]
+    except Exception:
+        return []
+
+
 def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
     """
     Run a broad pre-flight search for the question and return a multi-line
     context block plus structured citation dicts for the UI.
 
-    Silver spot price and USD/ILS are intentionally excluded from the
-    sub-queries — get_live_context handles those with targeted regex.
+    Two complementary query sources are combined:
+      1. Keyword-based sub-queries (_build_broad_queries) — deterministic,
+         covers known domains (geopolitics, commodities, Israeli market …).
+      2. AI-planned queries (_plan_queries_with_ai) — Gemini Flash generates
+         4 targeted English queries for ANY question, making the search
+         truly topic-agnostic.
 
-    Parameters
-    ----------
-    question : str
-        The raw user question.
-
-    Returns
-    -------
-    tuple[str, list[dict]]
-        (context_block, citations)
-        Both are empty / [] when the search is skipped or fails.
+    All Serper.dev searches run in parallel via ThreadPoolExecutor.
+    Silver/ILS targeted extraction is handled separately by get_live_context.
     """
     q_lower = question.lower()
     if not any(kw in q_lower for kw in _TRIGGER_KEYWORDS):
@@ -355,11 +392,25 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
     if not search_is_available():
         return "", []
 
-    queries = _build_broad_queries(question)
+    # ── Build query list ───────────────────────────────────────────────────
+    # Run keyword-based planning and AI-based planning in parallel so the
+    # AI call doesn't add to the critical path of the keyword lookup.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        kw_future = ex.submit(_build_broad_queries, question)
+        ai_future = ex.submit(_plan_queries_with_ai, question)
+        kw_queries = kw_future.result()
+        ai_queries = ai_future.result()
 
-    # When the question is short (≤80 chars) and contains coin/value keywords,
-    # the user likely uploaded an image without specifying the coin.
-    # Inject extra numismatic discovery queries.
+    # Merge: keyword queries first (deterministic, fast), then AI queries
+    # (deduplicated by lowercased text so near-duplicates are skipped).
+    seen_q: set = {q.lower() for q in kw_queries}
+    for q in ai_queries:
+        if q.lower() not in seen_q:
+            kw_queries.append(q)
+            seen_q.add(q.lower())
+    queries = kw_queries
+
+    # ── Short image-based coin query expansion ─────────────────────────────
     _IMG_COIN_KW = ("coin", "מטבע", "שווי", "worth", "value", "ערך", "כסף",
                     "אספן", "אספנות")
     if len(question.strip()) <= 80 and any(kw in q_lower for kw in _IMG_COIN_KW):
@@ -369,20 +420,25 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
             "silver coin spot vs collector premium grading value 2026",
         ]
 
+    # ── Run all Serper searches in parallel ────────────────────────────────
     seen_urls: set = set()
     all_results: List[dict] = []
 
-    for query in queries:
-        for hit in _serper_search(query, num=4):
-            url = hit.get("link", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                all_results.append(hit)
+    def _fetch(q: str) -> List[dict]:
+        return _serper_search(q, num=4)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(queries), 6)) as ex:
+        for hits in ex.map(_fetch, queries):
+            for hit in hits:
+                url = hit.get("link", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_results.append(hit)
 
     if not all_results:
         return "", []
 
-    top = all_results[:8]
+    top = all_results[:10]
 
     citations: List[dict] = [
         {"title": r.get("title", r.get("link", "")), "url": r.get("link", "")}
@@ -405,11 +461,13 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
         return "", []
 
     context_block = (
-        "=== SUPPORTING CONTEXT (Broad Pre-Flight Search) ===\n"
-        "Additional live search results retrieved before this debate.\n"
-        "Use for background context alongside the VERIFIED MARKET DATA line.\n\n"
+        "=== LIVE RESEARCH DATA — Pre-Flight Search (AI-Planned) ===\n"
+        "The following results were retrieved live seconds before this debate.\n"
+        "They are your PRIMARY grounding source for current facts.\n"
+        "Prioritise these results over training-memory for any claim about\n"
+        "current events, prices, news, or the state of the world.\n\n"
         + "\n\n".join(lines)
-        + "\n\n=== END SUPPORTING CONTEXT ===\n\n"
+        + "\n\n=== END LIVE RESEARCH DATA ===\n\n"
     )
 
     return context_block, citations
