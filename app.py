@@ -90,6 +90,8 @@ from glossary import (
     UI_SPINNER_STAGE1,
     UI_SPINNER_STAGE2,
     UI_SPINNER_STAGE3,
+    UI_CACHE_HIT_BANNER,
+    UI_CACHE_RERUN_BTN,
     UI_NEW_QUERY_BUTTON,
     UI_SUBMIT_BUTTON,
     UI_TECH_LOG_TITLE,
@@ -282,6 +284,8 @@ if "_auth_mode" not in st.session_state:
     st.session_state._auth_mode = UI_AUTH_LOGIN_TAB
 if "_query_counter" not in st.session_state:
     st.session_state._query_counter = 0   # incremented on "New Query" to reset widgets
+if "_force_rerun" not in st.session_state:
+    st.session_state._force_rerun = False  # True = skip cache check this run
 
 
 # ---------------------------------------------------------------------------
@@ -722,9 +726,15 @@ def _display_results(results: dict) -> None:
     import re as _re
     from datetime import datetime as _dt
 
-    # History banner
+    # History / cache banner
     if st.session_state.from_history:
         st.info(UI_HISTORY_BANNER)
+        # "Run anyway" button — lets the user force a fresh API call
+        if st.button(UI_CACHE_RERUN_BTN, key="force_rerun_btn"):
+            st.session_state._force_rerun = True
+            st.session_state.current_results = None
+            st.session_state.from_history    = False
+            st.rerun()
 
     final     = results["final_answer"]
     citations = results.get("citations", [])
@@ -912,6 +922,26 @@ if start_button:
     if len(all_active_keys) < 2:
         st.warning(UI_WARNING_MIN_MODELS)
         st.stop()
+
+    # ── Cache-hit check: reuse saved result to avoid redundant API costs ─────
+    # Only applies to text questions (image queries are always unique).
+    # Skipped when the user explicitly clicked the "Force rerun" button.
+    if question.strip() and not images_bytes and not st.session_state._force_rerun:
+        _uid_for_cache = (st.session_state.user or {}).get("uid")
+        _hist_for_cache = get_user_history(_uid_for_cache) if _uid_for_cache else load_history()
+        _q_norm = question.strip().lower()
+        _hit = next(
+            (e for e in _hist_for_cache if e.get("question", "").strip().lower() == _q_norm),
+            None,
+        )
+        if _hit:
+            st.session_state.current_results = _hit["results"]
+            st.session_state.from_history    = True
+            st.session_state._force_rerun    = False
+            st.rerun()
+
+    # Reset force-rerun flag for next cycle
+    st.session_state._force_rerun = False
 
     # ── Inject CSS (spinner ring + mission control dashboard) ────────────────
     st.markdown(_SPINNER_CSS + MISSION_CONTROL_CSS, unsafe_allow_html=True)
