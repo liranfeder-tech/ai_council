@@ -59,9 +59,9 @@ ProgressCallback = Callable[[float, str], None]   # (fraction 0-1, status text)
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _vision_prefix(image_bytes: Optional[bytes]) -> str:
-    """Return VISION_MODE_PROMPT when an image is present, else empty string."""
-    return VISION_MODE_PROMPT if image_bytes else ""
+def _vision_prefix(images: Optional[List[bytes]]) -> str:
+    """Return VISION_MODE_PROMPT when one or more images are present, else empty string."""
+    return VISION_MODE_PROMPT if images else ""
 
 
 # ---------------------------------------------------------------------------
@@ -72,17 +72,17 @@ def _fetch_one_answer(
     model_key: str,
     question: str,
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> tuple[str, str, List[dict]]:
     """Call a single model and return (model_key, answer_text, citations)."""
     prompt = PROMPT_INITIAL.format(
-        vision_prefix=_vision_prefix(image_bytes),
+        vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
     )
     answer, citations = call_model_with_citations(
-        model_key, prompt, image_bytes, image_mime
+        model_key, prompt, images, images_mime
     )
     return model_key, answer, citations
 
@@ -91,8 +91,8 @@ def run_stage1_parallel_inference(
     active_keys: List[str],
     question: str,
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> tuple[dict[str, str], List[dict]]:
     """
@@ -127,7 +127,7 @@ def run_stage1_parallel_inference(
         futures = {
             executor.submit(
                 _fetch_one_answer, key, question, verified_context,
-                image_bytes, image_mime
+                images, images_mime
             ): key
             for key in active_keys
         }
@@ -168,8 +168,8 @@ def _critique_one(
     question: str,
     answers: dict[str, str],
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> tuple[str, str, str]:
     """
     One model reviews one other model's answer.
@@ -177,14 +177,14 @@ def _critique_one(
     Returns (reviewer_key, target_key, critique_text).
     """
     prompt = PROMPT_CRITIQUE.format(
-        vision_prefix=_vision_prefix(image_bytes),
+        vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
         author_label=MODELS[target_key]["label"],
         author_answer=answers[target_key],
         other_answers=_build_other_answers_block(answers, exclude_key=target_key),
     )
-    critique = call_model(reviewer_key, prompt, image_bytes, image_mime)
+    critique = call_model(reviewer_key, prompt, images, images_mime)
     return reviewer_key, target_key, critique
 
 
@@ -193,8 +193,8 @@ def run_stage2_cross_critique(
     question: str,
     answers: dict[str, str],
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> dict[tuple[str, str], str]:
     """
@@ -219,7 +219,7 @@ def run_stage2_cross_critique(
         futures = {
             executor.submit(
                 _critique_one, reviewer, target, question, answers,
-                verified_context, image_bytes, image_mime
+                verified_context, images, images_mime
             ): (reviewer, target)
             for reviewer, target in pairs
         }
@@ -281,8 +281,8 @@ def _dialectic_one(
     initial_answer: str,
     critiques_against: List[str],
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> tuple[str, str]:
     """
     One model reads all critiques directed AT it and responds:
@@ -292,13 +292,13 @@ def _dialectic_one(
     """
     critique_block = "\n\n---\n\n".join(critiques_against)
     prompt = PROMPT_DIALECTIC.format(
-        vision_prefix=_vision_prefix(image_bytes),
+        vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
         your_initial_answer=initial_answer,
         critique_of_your_answer=critique_block,
     )
-    response = call_model(model_key, prompt, image_bytes, image_mime)
+    response = call_model(model_key, prompt, images, images_mime)
     return model_key, response
 
 
@@ -308,8 +308,8 @@ def run_stage3_dialectic(
     answers: dict[str, str],
     critiques: dict[tuple[str, str], str],
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> dict[str, str]:
     """
@@ -343,7 +343,7 @@ def run_stage3_dialectic(
                 _dialectic_one,
                 key, question, answers.get(key, ""),
                 critiques_by_target[key],
-                verified_context, image_bytes, image_mime,
+                verified_context, images, images_mime,
             ): key
             for key in responding
         }
@@ -368,8 +368,8 @@ def run_stage4_consensus(
     critiques: dict[tuple[str, str], str],
     dialectic: dict[str, str],
     verified_context: str = "",
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
     silver_price: str = "N/A",
     exchange_rate: str = "N/A",
     progress_cb: Optional[ProgressCallback] = None,
@@ -399,7 +399,7 @@ def run_stage4_consensus(
         progress_cb(0.1, f"🏛️ {master_label} (Mediator) is synthesising …")
 
     prompt = COUNCIL_CONSENSUS_PROMPT.format(
-        vision_prefix=_vision_prefix(image_bytes),
+        vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
         all_answers_block=_format_all_answers(answers),
@@ -410,7 +410,7 @@ def run_stage4_consensus(
     )
 
     final_answer, _cit = call_model_with_citations(
-        MASTER_MODEL_KEY, prompt, image_bytes, image_mime
+        MASTER_MODEL_KEY, prompt, images, images_mime
     )
     fallback_used = False
 
@@ -421,7 +421,7 @@ def run_stage4_consensus(
                 f"⚠️ {master_label} failed — switching to {fallback_label} …",
             )
         fb_answer, _fb_cit = call_model_with_citations(
-            FALLBACK_MODEL_KEY, prompt, image_bytes, image_mime
+            FALLBACK_MODEL_KEY, prompt, images, images_mime
         )
         if not fb_answer.startswith("ERROR:"):
             final_answer  = fb_answer
@@ -440,8 +440,8 @@ def run_stage4_consensus(
 def run_council_debate(
     active_keys: List[str],
     question: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
     stage0_cb: Optional[ProgressCallback] = None,
     stage1_cb: Optional[ProgressCallback] = None,
     stage2_cb: Optional[ProgressCallback] = None,
@@ -477,7 +477,9 @@ def run_council_debate(
         "citations"           list[dict]        — from pre-flight Serper.dev search
         "has_image"           bool
     """
-    all_keys = list(dict.fromkeys([MASTER_MODEL_KEY] + active_keys))
+    all_keys    = list(dict.fromkeys([MASTER_MODEL_KEY] + active_keys))
+    images      = images      or []
+    images_mime = images_mime or []
 
     # ── Stage 0: Pre-flight live search ───────────────────────────────────
     if stage0_cb:
@@ -540,7 +542,7 @@ def run_council_debate(
     # ── Stage 1: Parallel Thesis ───────────────────────────────────────────
     answers, _s1_cit = run_stage1_parallel_inference(
         all_keys, question, verified_context,
-        image_bytes, image_mime, progress_cb=stage1_cb,
+        images, images_mime, progress_cb=stage1_cb,
     )
 
     # ── Stage 2: Adversarial Audit ─────────────────────────────────────────
@@ -548,7 +550,7 @@ def run_council_debate(
     if len(all_keys) >= 2:
         critiques = run_stage2_cross_critique(
             all_keys, question, answers, verified_context,
-            image_bytes, image_mime, progress_cb=stage2_cb,
+            images, images_mime, progress_cb=stage2_cb,
         )
 
     # ── Stage 3: Dialectic Response ────────────────────────────────────────
@@ -556,7 +558,7 @@ def run_council_debate(
     if critiques:
         dialectic = run_stage3_dialectic(
             all_keys, question, answers, critiques, verified_context,
-            image_bytes, image_mime, progress_cb=stage3_cb,
+            images, images_mime, progress_cb=stage3_cb,
         )
 
     # Reliability scores: two independent deduction categories.
@@ -587,7 +589,7 @@ def run_council_debate(
     # ── Stage 4: Consensus Synthesis ──────────────────────────────────────
     final_answer, fallback_used = run_stage4_consensus(
         question, answers, critiques, dialectic, verified_context,
-        image_bytes, image_mime,
+        images, images_mime,
         silver_price=silver_price,
         exchange_rate=exchange_rate,
         progress_cb=stage4_cb,
@@ -610,5 +612,5 @@ def run_council_debate(
         "final_answer":       final_answer,
         "fallback_used":      fallback_used,
         "citations":          citations,
-        "has_image":          image_bytes is not None,
+        "has_images":         len(images) > 0,
     }

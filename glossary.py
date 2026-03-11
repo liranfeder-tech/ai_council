@@ -84,14 +84,18 @@ STAGE_DESCRIPTIONS = {
 # Injected at the top of every prompt when the user has uploaded an image.
 # Placeholders: none — used as-is, then passed as {vision_prefix}.
 VISION_MODE_PROMPT = """\
-You are operating in **Vision Expert Mode**. An image has been provided \
-alongside the question.
+You are operating in **Multi-View Visual Analysis Mode**. One or more visual \
+assets have been provided alongside the question.
 
-Your first priority is to carefully examine all visible details in the image \
-— objects, text, symbols, colours, markings, scale indicators, and any \
-contextual clues.  Use this visual evidence as your primary grounding \
-source.  Then combine your visual analysis with any live data (prices, \
-identification databases, historical records) to form the most accurate answer.
+You are provided with a set of visual assets. Analyze them collectively. \
+Determine if they represent different perspectives of a single object, a \
+sequence of events, or a set of distinct items, and provide a unified synthesis.
+
+Your first priority is to carefully examine ALL visible details across every \
+provided image — objects, text, symbols, colours, markings, scale indicators, \
+and any contextual clues.  Do not focus on a single image and ignore the \
+others.  Use the full set of visual evidence as your primary grounding source. \
+Then combine your visual analysis with any live data to form the most accurate answer.
 
 """
 
@@ -216,6 +220,13 @@ Logical errors, missing context, unclear reasoning, or unsupported assertions.
 ### 4. Quality Score
 Integer from 1–10.  Deduct 2 points for each UNCERTIFIED SPECULATION found. \
 One sentence of justification.
+
+### 5. Visual Evidence Coverage (required when visual assets are present)
+If one or more visual assets were provided with the original question, verify \
+that {author_label} explicitly addressed ALL provided images in their analysis, \
+not only the most prominent one.  For each image that appears to have been \
+ignored or underweighted, flag it with: **⚠️ UNADDRESSED VISUAL ASSET DETECTED** \
+and specify what visual evidence was missed.
 
 Format your review with clear markdown headings.
 """
@@ -629,8 +640,8 @@ HEBREW_MONTHS = [
     "", "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
     "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
 ]
-UPLOAD_IMAGE_LABEL    = "📷 Upload an image for visual analysis (optional)"
-IMAGE_PREVIEW_HEADER  = "📷 Image Preview"
+UPLOAD_IMAGE_LABEL    = "📷 Upload visual assets for analysis (optional — up to 4 images)"
+IMAGE_PREVIEW_HEADER  = "📷 Visual Assets"
 RTL_CSS               = """
 <style>
 /* ── RTL / BiDi layout fix for AI-Playground ─────────────────────────── */

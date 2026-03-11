@@ -19,7 +19,7 @@ is identical to the text-only path.
 
 import base64
 import os
-from typing import Optional
+from typing import List, Optional
 
 import anthropic
 import openai
@@ -51,24 +51,26 @@ _GEMINI_FIELD_AGENT_INSTRUCTION = (
 def _call_anthropic(
     model_id: str,
     prompt: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the Anthropic (Claude) API and return the text reply."""
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    images      = images      or []
+    images_mime = images_mime or []
 
-    if image_bytes:
-        content = [
-            {
+    if images:
+        content = []
+        for img_bytes, img_mime in zip(images, images_mime):
+            content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": image_mime,
-                    "data": base64.standard_b64encode(image_bytes).decode("utf-8"),
+                    "media_type": img_mime,
+                    "data": base64.standard_b64encode(img_bytes).decode("utf-8"),
                 },
-            },
-            {"type": "text", "text": prompt},
-        ]
+            })
+        content.append({"type": "text", "text": prompt})
     else:
         content = prompt
 
@@ -83,21 +85,22 @@ def _call_anthropic(
 def _call_openai(
     model_id: str,
     prompt: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the OpenAI API and return the text reply."""
     client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    images      = images      or []
+    images_mime = images_mime or []
 
-    if image_bytes:
-        b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-        content = [
-            {"type": "text", "text": prompt},
-            {
+    if images:
+        content = [{"type": "text", "text": prompt}]
+        for img_bytes, img_mime in zip(images, images_mime):
+            b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+            content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:{image_mime};base64,{b64}"},
-            },
-        ]
+                "image_url": {"url": f"data:{img_mime};base64,{b64}"},
+            })
     else:
         content = prompt
 
@@ -112,32 +115,32 @@ def _call_openai(
 def _call_google(
     model_id: str,
     prompt: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> tuple[str, list[dict]]:
     """
-    Call the Google Generative AI (Gemini) API with Google Search Grounding.
+    Call the Google Generative AI (Gemini) API.
 
     Returns
     -------
     tuple[str, list[dict]]
-        (answer_text, citations)
-        citations is a list of {"title": str, "url": str} dicts, one per
-        grounding chunk.  Empty list when grounding was not triggered.
+        (answer_text, citations) — citations always empty (from search_engine.py).
     """
-    # Uses the new google-genai SDK (google.generativeai is deprecated).
-    # Live market facts are injected via the Verified Context Block in the
-    # prompt — no GoogleSearchRetrieval tool needed here.
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    images      = images      or []
+    images_mime = images_mime or []
 
     cfg = genai_types.GenerateContentConfig(
         system_instruction=_GEMINI_FIELD_AGENT_INSTRUCTION,
         max_output_tokens=4096,
     )
 
-    if image_bytes:
-        image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=image_mime)
-        contents = [image_part, prompt]
+    if images:
+        contents = [
+            genai_types.Part.from_bytes(data=img_bytes, mime_type=img_mime)
+            for img_bytes, img_mime in zip(images, images_mime)
+        ]
+        contents.append(prompt)
     else:
         contents = prompt
 
@@ -146,7 +149,7 @@ def _call_google(
         contents=contents,
         config=cfg,
     )
-    return response.text, []   # citations come from search_engine.py
+    return response.text, []
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +159,8 @@ def _call_google(
 def call_model_with_citations(
     model_key: str,
     prompt: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> tuple[str, list[dict]]:
     """
     Like call_model() but also returns structured citation data.
@@ -167,7 +170,7 @@ def call_model_with_citations(
     tuple[str, list[dict]]
         (answer_text, citations)
         citations is a list of {"title": str, "url": str} dicts.
-        Always empty for non-Google providers (they don't support grounding).
+        Always empty for non-Google providers.
     """
     if model_key not in MODELS:
         return f"ERROR: Unknown model key '{model_key}'. Check glossary.MODELS.", []
@@ -178,11 +181,11 @@ def call_model_with_citations(
 
     try:
         if provider == "google":
-            return _call_google(model_id, prompt, image_bytes, image_mime)
+            return _call_google(model_id, prompt, images, images_mime)
         elif provider == "anthropic":
-            return _call_anthropic(model_id, prompt, image_bytes, image_mime), []
+            return _call_anthropic(model_id, prompt, images, images_mime), []
         elif provider == "openai":
-            return _call_openai(model_id, prompt, image_bytes, image_mime), []
+            return _call_openai(model_id, prompt, images, images_mime), []
         else:
             return f"ERROR: Unsupported provider '{provider}' for model '{model_key}'.", []
 
@@ -198,8 +201,8 @@ def call_model_with_citations(
 def call_model(
     model_key: str,
     prompt: str,
-    image_bytes: Optional[bytes] = None,
-    image_mime: str = "image/jpeg",
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
 ) -> str:
     """
     Call any registered model by its glossary key and return its text reply.
@@ -210,11 +213,10 @@ def call_model(
         A key from glossary.MODELS (e.g. "claude", "gpt", "gemini").
     prompt : str
         The fully-rendered prompt string to send.
-    image_bytes : bytes, optional
-        Raw image file bytes.  When provided the model receives both the
-        image and the prompt (vision / multimodal call).
-    image_mime : str
-        MIME type of the image (default "image/jpeg").
+    images : list[bytes], optional
+        Raw image file bytes for each uploaded visual asset.
+    images_mime : list[str], optional
+        MIME type per image (e.g. ["image/jpeg", "image/png"]).
 
     Returns
     -------
@@ -231,14 +233,13 @@ def call_model(
 
     try:
         if provider == "anthropic":
-            return _call_anthropic(model_id, prompt, image_bytes, image_mime)
+            return _call_anthropic(model_id, prompt, images, images_mime)
 
         elif provider == "openai":
-            return _call_openai(model_id, prompt, image_bytes, image_mime)
+            return _call_openai(model_id, prompt, images, images_mime)
 
         elif provider == "google":
-            text, citations = _call_google(model_id, prompt, image_bytes, image_mime)
-            # Append a markdown citation footer for inline display in Stage 1/2 expanders.
+            text, citations = _call_google(model_id, prompt, images, images_mime)
             if citations:
                 footer = "\n".join(f"- [{c['title']}]({c['url']})" for c in citations)
                 text += f"\n\n---\n**Grounding sources (Google Search)**\n{footer}"
@@ -248,11 +249,9 @@ def call_model(
             return f"ERROR: Unsupported provider '{provider}' for model '{model_key}'."
 
     except KeyError as exc:
-        # Missing API key in environment
         return (
             f"ERROR: Missing environment variable {exc}.  "
             f"Please set it before running the app."
         )
     except Exception as exc:  # noqa: BLE001
-        # Catch-all: surface the error message without crashing the whole UI
         return f"ERROR: {type(exc).__name__}: {exc}"

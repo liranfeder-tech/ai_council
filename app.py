@@ -374,24 +374,37 @@ question = st.text_area(
     key="question_input",
 )
 
-# ── Image upload (optional) ───────────────────────────────────────────────
-uploaded_file = st.file_uploader(
+# ── Image upload (optional, multiple) ────────────────────────────────────
+uploaded_files = st.file_uploader(
     UPLOAD_IMAGE_LABEL,
     type=["png", "jpg", "jpeg", "webp"],
+    accept_multiple_files=True,
     key="image_upload",
 )
 
-image_bytes: Optional[bytes] = None
-image_mime:  str             = "image/jpeg"
+images_bytes: list = []
+images_mime:  list = []
 
-if uploaded_file is not None:
-    image_bytes = uploaded_file.getvalue()
-    image_mime  = uploaded_file.type or "image/jpeg"
+if uploaded_files:
+    for f in uploaded_files[:4]:   # cap at 4
+        images_bytes.append(f.getvalue())
+        images_mime.append(f.type or "image/jpeg")
+
     with st.expander(IMAGE_PREVIEW_HEADER, expanded=True):
-        st.image(image_bytes, width=320)
-        st.caption(f"{uploaded_file.name}  ·  {len(image_bytes) // 1024} KB  ·  {image_mime}")
+        n_cols = min(len(uploaded_files), 4)
+        cols   = st.columns(n_cols)
+        for col, f in zip(cols, uploaded_files[:4]):
+            with col:
+                st.image(f.getvalue(), use_container_width=True)
+                st.caption(f"{f.name} · {len(f.getvalue()) // 1024} KB")
+        if len(uploaded_files) > 4:
+            st.caption(f"_Showing first 4 of {len(uploaded_files)} images._")
 
-start_button = st.button(UI_SUBMIT_BUTTON, type="primary", use_container_width=True)
+_can_submit = bool(question.strip()) or bool(images_bytes)
+start_button = st.button(
+    UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
+    disabled=not _can_submit,
+)
 
 st.divider()
 
@@ -722,8 +735,8 @@ def _display_results(results: dict) -> None:
 # Debate execution — runs only when the submit button is pressed
 # ---------------------------------------------------------------------------
 if start_button:
-    if not question.strip():
-        st.warning("Please type a question first.")
+    if not question.strip() and not images_bytes:
+        st.warning("Please provide a question or upload at least one image.")
         st.stop()
 
     all_active_keys = list(dict.fromkeys([MASTER_MODEL_KEY] + selected_keys))
@@ -734,9 +747,10 @@ if start_button:
     # ── Inject spinner CSS once ───────────────────────────────────────────────
     st.markdown(_SPINNER_CSS, unsafe_allow_html=True)
 
+    _n_imgs = len(images_bytes)
     _main_label = (
-        "👁️ Vision Council — analysing your image …"
-        if image_bytes
+        f"👁️ Vision Council — analysing {_n_imgs} image{'s' if _n_imgs > 1 else ''} …"
+        if images_bytes
         else "🤖 AI Council is deliberating …"
     )
 
@@ -795,8 +809,8 @@ if start_button:
         _live_results = run_council_debate(
             active_keys=selected_keys,
             question=question,
-            image_bytes=image_bytes,
-            image_mime=image_mime,
+            images=images_bytes,
+            images_mime=images_mime,
             stage0_cb=stage0_cb,
             stage1_cb=stage1_cb,
             stage2_cb=stage2_cb,
