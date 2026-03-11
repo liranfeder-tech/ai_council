@@ -42,6 +42,7 @@ from glossary import (
     STAGE0_LIVE_LABEL,
     STAGE0_MARKET_INSTRUCTION,
     TEMPORAL_AUTHORITY_CLAUSE,
+    TEMPORAL_AUTHORITY_CLAUSE_GENERAL,
     UI_STAGE0_COMPLETE_TPL,
     UI_STAGE0_SEARCHING,
     VISION_MODE_PROMPT,
@@ -516,8 +517,13 @@ def run_council_debate(
     context_parts: List[str] = []
 
     # Temporal Authority Clause: placed FIRST so it is the first thing every
-    # model reads.  Prevents treating live figures as hypothetical/unverified.
-    if clean_data:
+    # model reads.  Two variants:
+    #   - Commodity clause (silver+ILS present): enforces live price figures.
+    #   - General clause (search results but no commodity prices): anchors
+    #     the date and directs models to use the search snippets below.
+    has_commodity_data = silver_price != "N/A" or exchange_rate != "N/A"
+
+    if has_commodity_data:
         context_parts.append(
             TEMPORAL_AUTHORITY_CLAUSE.format(
                 current_date=current_date,
@@ -525,10 +531,16 @@ def run_council_debate(
                 exchange_rate=exchange_rate,
             )
         )
+    elif broad_block:
+        # We have live search results for the question but no commodity prices.
+        context_parts.append(
+            TEMPORAL_AUTHORITY_CLAUSE_GENERAL.format(current_date=current_date)
+        )
+    else:
+        # No search data at all — just anchor the date.
+        context_parts.append(f"TODAY'S DATE: {current_date}")
 
-    context_parts.append(f"TODAY'S DATE: {current_date}")
-
-    if clean_data:
+    if has_commodity_data:
         context_parts.append(
             f"{STAGE0_LIVE_LABEL}\n{clean_data}\n\n"
             + STAGE0_MARKET_INSTRUCTION
@@ -566,10 +578,12 @@ def run_council_debate(
     #
     # 1. Retraction deductions (-20 each): model changed a correct position
     #    under peer pressure (normal peer-review behaviour, mild penalty).
-    # 2. Contextual Hallucination deductions (-40 each): model dismissed
-    #    Stage 0 live data as hypothetical / unconfirmed — this is a factual
-    #    error and receives a steeper penalty.  A model can only score 100
-    #    if it accepted live data as authoritative AND held its position.
+    # 2. Contextual Hallucination deductions (-40 each): model rejected
+    #    actual Stage 0 commodity data as hypothetical/unconfirmed.
+    #    IMPORTANT: these deductions only apply when clean_data is present
+    #    (i.e., real commodity figures were retrieved).  When no commodity
+    #    data exists, saying "I cannot verify" is correct behaviour and must
+    #    NOT be penalised.
     _RETRACTION_TRIGGERS = (
         "you are correct", "you're right", "i was wrong", "i acknowledge",
         "i concede", "i was mistaken", "valid point", "i agree with",
@@ -579,10 +593,19 @@ def run_council_debate(
     )
     reliability_scores: dict[str, int] = {}
     for key, resp in dialectic.items():
-        low                = resp.lower()
-        retraction_hits    = sum(1 for t in _RETRACTION_TRIGGERS              if t in low)
-        hallucination_hits = sum(1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low)
-        hard_hits          = sum(1 for t in HARD_HALLUCINATION_TRIGGERS        if t in low)
+        low             = resp.lower()
+        retraction_hits = sum(1 for t in _RETRACTION_TRIGGERS if t in low)
+
+        # Only penalise for rejecting Stage 0 data when that data actually exists.
+        if clean_data:
+            hallucination_hits = sum(
+                1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low
+            )
+            hard_hits = sum(1 for t in HARD_HALLUCINATION_TRIGGERS if t in low)
+        else:
+            hallucination_hits = 0
+            hard_hits          = 0
+
         reliability_scores[key] = max(
             0,
             100 - retraction_hits * 20 - hallucination_hits * 40 - hard_hits * 50,

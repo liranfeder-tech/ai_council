@@ -333,23 +333,29 @@ Replace with: "⚠️ No verified live data found for [topic]."
 Use ONLY Tier 1 and Tier 2 data.  For every topic where only Tier 3 data \
 existed, write the explicit "⚠️ No verified live data" notice.
 
-### Step 4 — Technical Breakdown (mandatory for price evaluations)
-If the question involves ANY coin, metal, asset, or commodity valuation, you \
-MUST produce a **Technical Breakdown** section.  The following Stage 0 values \
-are the ONLY permitted inputs for all arithmetic — do NOT substitute any \
-training-memory figure:
+### Step 4 — Technical Breakdown (only for metal/coin/commodity weight valuations)
+ONLY produce this section if the question involves weighing a physical metal, \
+coin, or commodity and computing its monetary value from weight + spot price. \
+Do NOT produce this section for general financial, investment, geopolitical, \
+or advisory questions.
+
+If applicable, the following Stage 0 values are the ONLY permitted inputs — \
+do NOT substitute training-memory figures:
 
 - **Silver spot price (Stage 0):** {silver_price}
 - **USD/ILS exchange rate (Stage 0):** {exchange_rate}
 
-Apply this exact calculation formula, substituting the actual numbers:
+If both values are "N/A", state that the calculation cannot be performed \
+without live commodity data and omit the section entirely.
+
+Apply this formula only when the above values are real numbers:
 
 > **נוסחת החישוב:**
 > [משקל נקי בגרם] / 31.1 × {silver_price} × {exchange_rate} + [פרמיית אספנות]
 
 Show every arithmetic step explicitly (weight → troy-oz → USD → ILS → \
-+ premium) so the user can verify the result independently.  End the section \
-with the line: "✅ Calculation grounded exclusively in Stage 0 live data."
++ premium).  End the section with: \
+"✅ Calculation grounded exclusively in Stage 0 live data."
 
 ## Output Format
 
@@ -359,11 +365,8 @@ with the line: "✅ Calculation grounded exclusively in Stage 0 live data."
 4. **Verification Status** — List every Tier 1 citation with its URL. If none, \
 write: "⚠️ No real-time grounding data was available. All numeric claims omitted."
 5. **Confidence Note** — One paragraph on remaining uncertainties.
-6. **Technical Breakdown** _(required when price or commodity evaluation is \
-present)_ — Use the exact markdown header `## Technical Breakdown`.  Substitute \
-the Stage 0 values {silver_price} and {exchange_rate} into the formula, show \
-each arithmetic step, and close the section with: \
-"✅ Calculation grounded exclusively in Stage 0 live data."
+6. **Technical Breakdown** _(only when physical commodity weight valuation \
+is present — see Step 4 above)_
 
 Do NOT attribute claims to individual models.  Present as a single, \
 authoritative, certified response.
@@ -525,8 +528,7 @@ UI_UNVERIFIED_WARNING = (
 # every model prompt when live market data is detected.
 
 # ── Temporal Authority Clause ──────────────────────────────────────────────
-# Injected at the TOP of verified_context when Stage 0 live data is present.
-# Overrides any model tendency to treat live market data as hypothetical.
+# Used when Stage 0 found commodity data (silver + ILS).
 # Placeholders: {current_date}, {silver_price}, {exchange_rate}
 TEMPORAL_AUTHORITY_CLAUSE = """\
 ╔══════════════════════════════════════════════════════════════════╗
@@ -548,28 +550,56 @@ TEMPORAL_AUTHORITY_CLAUSE = """\
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
+# ── General Temporal Authority Clause ─────────────────────────────────────
+# Used when Stage 0 found search results but NO specific commodity values.
+# Anchors the date and surfaces the live search data without a commodity frame.
+# Placeholders: {current_date}
+TEMPORAL_AUTHORITY_CLAUSE_GENERAL = """\
+╔══════════════════════════════════════════════════════════════════╗
+║      SYSTEM OVERRIDE — TEMPORAL AUTHORITY DECLARATION           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  You are operating on: {current_date}                           ║
+║                                                                  ║
+║  Live web search results for this question were retrieved        ║
+║  seconds before this session started (see below).               ║
+║  Use them as your PRIMARY grounding source for current facts.   ║
+║                                                                  ║
+║  ⛔ Do NOT ignore the search results below.                     ║
+║  ⛔ Do NOT invent facts not present in the search results.      ║
+║  ✅ If the search results do not cover a sub-topic, say so      ║
+║     explicitly rather than guessing from training memory.       ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
 # Label wrapping the raw Serper.dev output block inside verified_context.
 STAGE0_LIVE_LABEL = "━━━ [LIVE SEARCH DATA — VERIFIED via Serper.dev] ━━━"
 
-# Phrases in Stage 3 dialectic responses that signal the model treated
-# Stage 0 live data as hypothetical / unverified.  Each match deducts
-# 40 points from the reliability score (separate from retraction deductions).
+# Phrases in Stage 3 dialectic responses that signal the model REJECTED
+# Stage 0 live data that was explicitly provided (silver/ILS commodity data).
+# These are only applied when clean_data is non-empty (see logic_engine.py).
+# Each match deducts 40 points from the reliability score.
+# NOTE: generic uncertainty ("cannot verify", "I don't know") is NOT listed
+# here — admitting honest ignorance is correct behaviour, not hallucination.
 CONTEXTUAL_HALLUCINATION_TRIGGERS: tuple = (
-    "hypothetical", "if the price is correct", "unconfirmed price",
-    "cannot verify the", "i cannot confirm", "assumed values",
-    "for the sake of argument", "if the data is accurate",
-    "assuming this data is correct", "treating as given",
-    "if we assume the price", "if these values are real",
-    "if the stage 0", "taking stage 0 at face value",
-    "cannot confirm the stage 0", "if the provided price",
-    "taking the provided", "if the figure is",
+    "if the price is correct",
+    "if the stage 0",
+    "taking stage 0 at face value",
+    "cannot confirm the stage 0",
+    "if the provided price",
+    "if these values are real",
+    "if we assume the price",
+    "treating as given",
+    "assuming this data is correct",
+    "if the data is accurate",
 )
 
-# Phrases that indicate the model explicitly reframed LIVE Stage 0 data
-# as hypothetical/conditional.  Each match deducts 50 points (hard penalty).
+# Phrases that indicate the model explicitly reframed LIVE Stage 0 commodity
+# data as conditional/hypothetical.  Only applied when clean_data is present.
+# Each match deducts 50 points (hard penalty).
 HARD_HALLUCINATION_TRIGGERS: tuple = (
-    "hypothetical",
-    "if correct",
+    "if the stage 0 price is correct",
+    "assuming stage 0 is accurate",
+    "if stage 0 data is real",
 )
 
 # ── Stage 0 progress UI strings ────────────────────────────────────────────

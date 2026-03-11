@@ -55,9 +55,19 @@ _TRIGGER_KEYWORDS = {
     # Numismatic / collector
     "numismatic", "collector", "mint", "graded", "pcgs", "ngc", "proof",
     "bullion", "premium", "mintage", "uncirculated", "ms70", "ms69",
-    # Hebrew keywords
+    # Geopolitical / news
+    "war", "conflict", "iran", "attack", "ceasefire", "hezbollah",
+    "hamas", "gaza", "geopolit", "military", "defense", "sanction",
+    "election", "news", "latest", "current", "today", "2026",
+    # Investment / finance
+    "invest", "investment", "profit", "return", "portfolio", "triple",
+    # Hebrew — financial
     "מטבע", "שווי", "כסף", "זהב", "אספן", "אספנות", "מחיר", "ערך",
     "פרמיה", "נדיר", "מנטה", "מוטבע",
+    # Hebrew — geopolitical / current events
+    "מלחמה", "איראן", "חיזבאללה", "חמאס", "עזה", "גיאופוליטי",
+    "בורסה", "מניה", "מניות", "השקעה", "להשקיע", "להרוויח",
+    "תשואה", "רווח", "שוק", "כלכלה", "עדכני", "היום", "עכשיו",
 }
 
 # ---------------------------------------------------------------------------
@@ -137,30 +147,93 @@ def _extract_ils(snippets: List[str]) -> Optional[str]:
 def _build_broad_queries(question: str) -> List[str]:
     """
     Return topic-specific supplementary queries for the broad search.
+    Covers any question domain: geopolitics, finance, markets, tech, news.
     Silver/ILS are intentionally excluded — get_live_context handles those.
     """
     q = question.lower()
     queries = [question[:200]]      # always search the original question
 
+    # ── Financial / commodity prices ──────────────────────────────────────
     if "gold" in q or "זהב" in q:
         queries.append("gold spot price USD today")
-    if any(kw in q for kw in ("bitcoin", "btc")):
+    if any(kw in q for kw in ("bitcoin", "btc", "ביטקוין")):
         queries.append("bitcoin price USD today")
     if any(kw in q for kw in ("ethereum", "eth")):
         queries.append("ethereum price USD today")
-    if any(kw in q for kw in ("oil", "crude")):
+    if any(kw in q for kw in ("oil", "crude", "נפט")):
         queries.append("WTI crude oil price per barrel today")
     if any(kw in q for kw in ("euro", "eur")):
         queries.append("EUR USD exchange rate today")
-    if "inflation" in q:
-        queries.append("US inflation rate latest CPI data")
+    if "inflation" in q or "אינפלציה" in q:
+        queries.append("US Israel inflation rate latest CPI data 2026")
+
+    # ── Geopolitical / current events / news ──────────────────────────────
+    _GEO_KW = (
+        "war", "conflict", "מלחמה", "iran", "איראן",
+        "middle east", "מזרח תיכון", "hezbollah", "חיזבאללה",
+        "geopolit", "גיאופוליטי", "attack", "תקיפה", "ceasefire",
+        "הסכם", "שביתת נשק", "negotiations", "משא ומתן",
+        "hamas", "חמאס", "gaza", "עזה", "west bank", "גדה",
+    )
+    if any(kw in q for kw in _GEO_KW):
+        queries.append("Middle East geopolitical situation latest news 2026")
+        if "iran" in q or "איראן" in q:
+            queries.append("Iran Israel military conflict latest news March 2026")
+            queries.append("Iran war status 2026")
+        if "hezbollah" in q or "חיזבאללה" in q:
+            queries.append("Hezbollah Lebanon status 2026")
+        if "gaza" in q or "עזה" in q or "hamas" in q or "חמאס" in q:
+            queries.append("Gaza ceasefire deal latest news 2026")
+
+    # ── Israeli / TASE stock market ────────────────────────────────────────
+    _MARKET_IL_KW = (
+        "tase", "בורסה", "ta-125", 'ת"א', "tel aviv stock",
+        "elbit", "אלביט", "rafael", "רפאל", "iai", "תעשייה אווירית",
+        "nice systems", "check point", "שוק ישראל", "מניה", "מניות",
+    )
+    if any(kw in q for kw in _MARKET_IL_KW):
+        queries.append("Israel TASE Tel Aviv stock exchange performance 2026")
+        queries.append("TA-125 index today 2026")
+        if "elbit" in q or "אלביט" in q:
+            queries.append("Elbit Systems ESLT stock price 2026")
+
+    # ── Defense / military industry ────────────────────────────────────────
+    _DEFENSE_KW = (
+        "defense", "ביטחון", "military", "צבאי", "weapon", "נשק",
+        "missile", "טיל", "drone", "כטב\"מ", "iron dome", "כיפת ברזל",
+    )
+    if any(kw in q for kw in _DEFENSE_KW):
+        queries.append("Israel defense industry stocks performance 2026")
+        queries.append("global defense sector market 2026")
+
+    # ── Investment / personal finance ──────────────────────────────────────
+    _INVEST_KW = (
+        "invest", "investment", "להשקיע", "השקעה", "return", "תשואה",
+        "portfolio", "תיק", "profit", "רווח", "make money", "להרוויח",
+        "triple", "להכפיל", "grow money", "כסף מהיר",
+    )
+    if any(kw in q for kw in _INVEST_KW):
+        queries.append("Israel investment opportunities 2026 market conditions")
+        queries.append("best investments during geopolitical uncertainty 2026")
+
+    # ── Crypto / digital assets ────────────────────────────────────────────
+    _CRYPTO_KW = ("crypto", "קריפטו", "blockchain", "altcoin", "defi", "nft")
+    if any(kw in q for kw in _CRYPTO_KW):
+        queries.append("crypto market conditions 2026 regulatory status Israel")
+
+    # ── Technology / AI / software ─────────────────────────────────────────
+    _TECH_KW = (
+        "ai", "artificial intelligence", "בינה מלאכותית", "gpt", "claude",
+        "software", "tech stock", "semiconductor", "chip", "quantum",
+    )
+    if any(kw in q for kw in _TECH_KW) and not any(kw in q for kw in _COIN_KW):
+        queries.append("AI technology sector market 2026 latest")
 
     # ── Numismatic / coin collector searches ──────────────────────────────
     _COIN_KW = ("coin", "מטבע", "numismatic", "collector", "mint", "bullion",
                 "proof", "uncirculated", "graded", "pcgs", "ngc",
                 "אספן", "אספנות")
     if any(kw in q for kw in _COIN_KW):
-        # Identify the specific coin type from the question if possible
         _KNOWN_COINS = [
             ("american eagle",   "American Eagle 1oz silver coin price value collector"),
             ("eagle",            "American Eagle 1oz silver coin price value collector"),
@@ -183,7 +256,6 @@ def _build_broad_queries(question: str) -> List[str]:
         if not matched:
             queries.append("1oz silver coin collector numismatic premium value today")
 
-        # Always add a generic collector premium query for silver coins
         if any(kw in q for kw in ("silver", "כסף", "1oz", "one ounce", "troy")):
             queries.append("silver coin collector premium vs spot price today")
             queries.append("silver bullion coin numismatic value grading premium 2026")
