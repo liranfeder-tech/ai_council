@@ -42,6 +42,12 @@ from typing import List, Optional, Tuple
 
 import requests
 
+from glossary import (
+    STAGE0_QUERY_PLAN_PROMPT,
+    STAGE0_RESEARCH_BLOCK_FOOTER,
+    STAGE0_RESEARCH_BLOCK_HEADER,
+)
+
 _SERPER_URL = "https://google.serper.dev/search"
 
 # Topic keywords that trigger a pre-flight search.
@@ -345,21 +351,7 @@ def _plan_queries_with_ai(question: str) -> List[str]:
         return []
     try:
         from ai_factory import call_model        # local import avoids circular dep at module load
-        prompt = (
-            "You are a search-query planner for a research assistant.\n"
-            "Given the question below, output exactly 4 Google search queries "
-            "in English that would retrieve the most current, factual information "
-            "needed to answer it.\n\n"
-            "Rules:\n"
-            "- Output ONLY 4 queries, one per line — no numbers, no bullets, "
-            "no explanation.\n"
-            "- Write every query in English, even if the question is in Hebrew.\n"
-            "- Prefer queries that return recent news or current data "
-            "(append the year when relevant).\n"
-            "- Cover different angles: e.g. geopolitical status, market data, "
-            "expert analysis, latest developments.\n\n"
-            f"Question: {question[:500]}"
-        )
+        prompt = STAGE0_QUERY_PLAN_PROMPT.format(question=question[:500])
         raw = call_model("gemini", prompt, [], [])
         queries = [
             line.strip()
@@ -461,13 +453,9 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
         return "", []
 
     context_block = (
-        "=== LIVE RESEARCH DATA — Pre-Flight Search (AI-Planned) ===\n"
-        "The following results were retrieved live seconds before this debate.\n"
-        "They are your PRIMARY grounding source for current facts.\n"
-        "Prioritise these results over training-memory for any claim about\n"
-        "current events, prices, news, or the state of the world.\n\n"
+        STAGE0_RESEARCH_BLOCK_HEADER
         + "\n\n".join(lines)
-        + "\n\n=== END LIVE RESEARCH DATA ===\n\n"
+        + STAGE0_RESEARCH_BLOCK_FOOTER
     )
 
     return context_block, citations

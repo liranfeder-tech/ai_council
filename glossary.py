@@ -574,6 +574,38 @@ TEMPORAL_AUTHORITY_CLAUSE_GENERAL = """\
 # Label wrapping the raw Serper.dev output block inside verified_context.
 STAGE0_LIVE_LABEL = "━━━ [LIVE SEARCH DATA — VERIFIED via Serper.dev] ━━━"
 
+# Header injected at the top of the broad research context block that wraps
+# all pre-flight search snippets passed to every model in Stages 1-4.
+# Appears when Stage 0 found relevant results for a non-commodity question.
+STAGE0_RESEARCH_BLOCK_HEADER = (
+    "=== LIVE RESEARCH DATA — Pre-Flight Search (AI-Planned) ===\n"
+    "The following results were retrieved live seconds before this debate.\n"
+    "They are your PRIMARY grounding source for current facts.\n"
+    "Prioritise these results over training-memory for any claim about\n"
+    "current events, prices, news, or the state of the world.\n\n"
+)
+
+STAGE0_RESEARCH_BLOCK_FOOTER = "\n\n=== END LIVE RESEARCH DATA ===\n\n"
+
+# System prompt used by _plan_queries_with_ai() in search_engine.py.
+# Gemini Flash receives this before generating targeted English search queries
+# for any user question.  Kept here so it can be tuned from a single place.
+STAGE0_QUERY_PLAN_PROMPT = """\
+You are a search-query planner for a research assistant.
+Given the question below, output exactly 4 Google search queries in English \
+that would retrieve the most current, factual information needed to answer it.
+
+Rules:
+- Output ONLY 4 queries, one per line — no numbers, no bullets, no explanation.
+- Write every query in English, even if the question is in Hebrew.
+- Prefer queries that return recent news or current data \
+(append the year when relevant).
+- Cover different angles: e.g. geopolitical status, market data, \
+expert analysis, latest developments.
+
+Question: {question}
+"""
+
 # Phrases in Stage 3 dialectic responses that signal the model REJECTED
 # Stage 0 live data that was explicitly provided (silver/ILS commodity data).
 # These are only applied when clean_data is non-empty (see logic_engine.py).
