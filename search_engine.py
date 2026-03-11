@@ -272,45 +272,56 @@ def search_is_available() -> bool:
     return bool(os.environ.get("SERPER_API_KEY"))
 
 
+_SILVER_KEYWORDS = {
+    "silver", "כסף", "bullion", "spot price", "troy", "oz", "ounce",
+    "numismatic", "coin", "מטבע", "אספן", "אספנות",
+}
+
+_ILS_KEYWORDS = {
+    "ils", "shekel", "שקל", "usd", "dollar", "דולר", "exchange rate",
+    "forex", "currency", "מטבע חוץ", "שער", "שוק מט\"ח",
+}
+
+
 def get_live_context(question: str) -> str:
     """
-    Run two targeted searches (silver spot price, USD/ILS rate), extract
-    numbers via regex, and return a single authoritative data line.
-
-    Parameters
-    ----------
-    question : str
-        The raw user question.
-
-    Returns
-    -------
-    str
-        e.g. "VERIFIED MARKET DATA (March 2026): Silver: $32.15/oz, USD/ILS: 3.68"
-        Empty string when: no financial keywords detected, key absent, or both
-        searches return no extractable numbers.
+    Run targeted searches (silver spot price and/or USD/ILS rate) only when
+    the question is actually about those topics.  Returns a single authoritative
+    data line, or an empty string when neither topic is relevant.
     """
-    if not any(kw in question.lower() for kw in _TRIGGER_KEYWORDS):
+    q_lower = question.lower()
+
+    if not any(kw in q_lower for kw in _TRIGGER_KEYWORDS):
         return ""
     if not search_is_available():
         return ""
 
+    wants_silver = any(kw in q_lower for kw in _SILVER_KEYWORDS)
+    wants_ils    = any(kw in q_lower for kw in _ILS_KEYWORDS)
+
+    # If neither commodity is relevant to this question, skip both searches.
+    if not wants_silver and not wants_ils:
+        return ""
+
     data_parts: List[str] = []
 
-    # ── Silver spot price ──────────────────────────────────────────────────
-    silver_hits   = _serper_search("silver spot price USD today", num=5)
-    silver_texts  = [r.get("snippet", "") + " " + r.get("title", "")
-                     for r in silver_hits]
-    silver_price  = _extract_silver(silver_texts)
-    if silver_price:
-        data_parts.append(f"Silver: {silver_price}")
+    # ── Silver spot price (only when question is about silver/metals/coins) ──
+    if wants_silver:
+        silver_hits  = _serper_search("silver spot price USD today", num=5)
+        silver_texts = [r.get("snippet", "") + " " + r.get("title", "")
+                        for r in silver_hits]
+        silver_price = _extract_silver(silver_texts)
+        if silver_price:
+            data_parts.append(f"Silver: {silver_price}")
 
-    # ── USD → ILS exchange rate ────────────────────────────────────────────
-    ils_hits   = _serper_search("USD to ILS exchange rate today", num=5)
-    ils_texts  = [r.get("snippet", "") + " " + r.get("title", "")
-                  for r in ils_hits]
-    ils_rate   = _extract_ils(ils_texts)
-    if ils_rate:
-        data_parts.append(f"USD/ILS: {ils_rate}")
+    # ── USD → ILS exchange rate (only when question involves ILS/currency) ──
+    if wants_ils:
+        ils_hits  = _serper_search("USD to ILS exchange rate today", num=5)
+        ils_texts = [r.get("snippet", "") + " " + r.get("title", "")
+                     for r in ils_hits]
+        ils_rate  = _extract_ils(ils_texts)
+        if ils_rate:
+            data_parts.append(f"USD/ILS: {ils_rate}")
 
     if not data_parts:
         return ""

@@ -306,6 +306,8 @@ if "_query_counter" not in st.session_state:
     st.session_state._query_counter = 0   # incremented on "New Query" to reset widgets
 if "_force_rerun" not in st.session_state:
     st.session_state._force_rerun = False  # True = skip cache check this run
+if "_cached_usage" not in st.session_state:
+    st.session_state._cached_usage = None  # (uid, count) — avoids Firestore call on every keystroke
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +409,12 @@ with st.sidebar:
 
     # ── Daily usage quota ─────────────────────────────────────────────────────
     _sb_uid = (st.session_state.user or {}).get("uid")
-    _usage_today = get_usage_count(_sb_uid) if _sb_uid else 0
+    # Cache the usage count in session_state so we only hit Firestore once
+    # per session instead of on every keystroke / re-render.
+    _cached = st.session_state._cached_usage
+    if _sb_uid and (_cached is None or _cached[0] != _sb_uid):
+        st.session_state._cached_usage = (_sb_uid, get_usage_count(_sb_uid))
+    _usage_today   = st.session_state._cached_usage[1] if _sb_uid else 0
     _quota_reached = _usage_today >= DAILY_QUERY_LIMIT
     if _sb_uid:
         st.divider()
@@ -1025,6 +1032,8 @@ if start_button:
     _uid_limit = (st.session_state.user or {}).get("uid")
     if _uid_limit:
         _allowed, _new_count = check_usage_limit(_uid_limit)
+        # Bust the cached count so the sidebar reflects the new value
+        st.session_state._cached_usage = (_uid_limit, _new_count)
         if not _allowed:
             st.warning(UI_QUOTA_REACHED)
             st.stop()
