@@ -104,6 +104,7 @@ def _deserialize_results(data: dict) -> dict:
 def save_to_history(
     results: dict,
     pdf_bytes: Optional[bytes] = None,
+    uid: Optional[str] = None,
 ) -> Optional[str]:
     """
     Append a completed debate to history.json and optionally cache its PDF.
@@ -162,7 +163,7 @@ def save_to_history(
     )
 
     # ── Optional Firestore mirror ─────────────────────────────────────────
-    _sync_to_firestore(entry)
+    _sync_to_firestore(entry, uid=uid)
 
     return pdf_cache_path
 
@@ -195,6 +196,52 @@ def clear_history() -> None:
     """Delete history.json if it exists."""
     if HISTORY_FILE.exists():
         HISTORY_FILE.unlink()
+
+
+def get_user_history(uid: str) -> list[dict]:
+    """
+    Fetch debate history for a specific authenticated user from Firestore.
+
+    Falls back to the local history.json when Firestore is unavailable.
+    Each returned element has the same shape as load_history() entries:
+        {"timestamp": str, "question": str, "results": dict}
+
+    Parameters
+    ----------
+    uid : str
+        The Firebase user UID (localId) of the authenticated user.
+    """
+    db = _get_firestore()
+    if db is not None:
+        try:
+            docs = (
+                db.collection("users")
+                .document(uid)
+                .collection("debates")
+                .order_by("timestamp", direction="DESCENDING")
+                .limit(MAX_ENTRIES)
+                .stream()
+            )
+            entries = []
+            for doc in docs:
+                raw = doc.to_dict()
+                if not raw:
+                    continue
+                try:
+                    entries.append({
+                        "timestamp": raw.get("timestamp", ""),
+                        "question":  raw.get("question", ""),
+                        "results":   _deserialize_results(raw.get("results", {})),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if entries:
+                return entries
+        except Exception:
+            pass   # fall through to local history on any Firestore error
+
+    # Fallback: local history.json (not user-scoped, but still useful)
+    return load_history()
 
 
 def firestore_status() -> bool:
@@ -277,28 +324,37 @@ def _get_firestore() -> Optional[Any]:
     return _firestore_client
 
 
-def _sync_to_firestore(entry: dict) -> None:
+def _sync_to_firestore(entry: dict, uid: Optional[str] = None) -> None:
     """
-    Mirror a history entry to Firestore under the 'council_debates' collection.
+    Mirror a history entry to Firestore.
 
-    Document ID is derived from the entry timestamp so replays from any device
-    see the same document.  Silently no-ops when Firebase is not configured or
-    the write fails — local history.json is always the source of truth.
+    When a uid is provided, the entry is written to the user-scoped path:
+        users/{uid}/debates/{doc_id}
+    Otherwise it falls back to the global collection:
+        council_debates/{doc_id}
 
-    To enable:
-        1. pip install firebase-admin>=6.2.0
-        2. Add FIREBASE_SERVICE_ACCOUNT=/path/to/service-account.json to .env
+    Document ID is derived from the timestamp so replays are deterministic.
+    Silently no-ops when Firebase is not configured — local history.json is
+    always the source of truth.
     """
     db = _get_firestore()
     if db is None:
         return
     try:
-        # Build a Firestore-safe document ID from the timestamp
         doc_id = (
             entry.get("timestamp", "unknown")
             .replace(" ", "_")
             .replace(":", "-")
         )
-        db.collection("council_debates").document(doc_id).set(entry)
+        if uid:
+            ref = (
+                db.collection("users")
+                .document(uid)
+                .collection("debates")
+                .document(doc_id)
+            )
+        else:
+            ref = db.collection("council_debates").document(doc_id)
+        ref.set(entry)
     except Exception:
         pass   # never propagate — Firestore sync is best-effort only

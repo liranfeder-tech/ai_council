@@ -45,6 +45,19 @@ from glossary import (
     STAGE_LABELS,
     UI_ASK_LABEL,
     UI_ASK_PLACEHOLDER,
+    UI_AUTH_EMAIL_LABEL,
+    UI_AUTH_GATE_MSG,
+    UI_AUTH_LOGGED_IN_AS,
+    UI_AUTH_LOGIN_BTN,
+    UI_AUTH_LOGIN_TAB,
+    UI_AUTH_LOGOUT_BTN,
+    UI_AUTH_NO_API_KEY_MSG,
+    UI_AUTH_PASSWORD_LABEL,
+    UI_AUTH_SIGNUP_BTN,
+    UI_AUTH_SIGNUP_TAB,
+    UI_AUTH_SUCCESS_LOGIN,
+    UI_AUTH_SUCCESS_SIGNUP,
+    UI_AUTH_TITLE,
     UPLOAD_IMAGE_LABEL,
     UI_CITATION_VISIT,
     UI_CITATIONS_NO_DATA,
@@ -84,7 +97,14 @@ from glossary import (
 )
 from logic_engine import run_council_debate
 from report_generator import generate_pdf
-from history_manager import clear_history, firestore_status, load_history, save_to_history
+from history_manager import (
+    clear_history,
+    firestore_status,
+    get_user_history,
+    load_history,
+    save_to_history,
+)
+from auth_manager import sign_in, sign_up
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +275,10 @@ if "current_results" not in st.session_state:
     st.session_state.current_results = None
 if "from_history" not in st.session_state:
     st.session_state.from_history = False
+if "user" not in st.session_state:
+    st.session_state.user = None   # None or {"uid": str, "email": str, "id_token": str}
+if "_auth_mode" not in st.session_state:
+    st.session_state._auth_mode = UI_AUTH_LOGIN_TAB
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +287,59 @@ if "from_history" not in st.session_state:
 with st.sidebar:
     st.title(f"{APP_ICON} {APP_TITLE}")
     st.caption(APP_SUBTITLE)
+    st.divider()
+
+    # ── Authentication ────────────────────────────────────────────────────────
+    _user = st.session_state.user
+
+    if _user:
+        # Logged-in state
+        st.success(f"✅ {UI_AUTH_LOGGED_IN_AS}: **{_user['email']}**")
+        if st.button(UI_AUTH_LOGOUT_BTN, use_container_width=True):
+            st.session_state.user = None
+            st.session_state.current_results = None
+            st.session_state.from_history    = False
+            st.rerun()
+    else:
+        # Login / Sign-up form
+        st.subheader(UI_AUTH_TITLE)
+        _auth_mode = st.radio(
+            "Mode",
+            [UI_AUTH_LOGIN_TAB, UI_AUTH_SIGNUP_TAB],
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="_auth_mode_radio",
+        )
+        _email    = st.text_input(UI_AUTH_EMAIL_LABEL,    key="auth_email")
+        _password = st.text_input(UI_AUTH_PASSWORD_LABEL, type="password", key="auth_password")
+        _btn_label = UI_AUTH_LOGIN_BTN if _auth_mode == UI_AUTH_LOGIN_TAB else UI_AUTH_SIGNUP_BTN
+
+        if st.button(_btn_label, type="primary", use_container_width=True, key="auth_submit"):
+            if not _email.strip() or not _password.strip():
+                st.error("Please enter both email and password.")
+            else:
+                with st.spinner("Authenticating …"):
+                    result = (
+                        sign_in(_email.strip(), _password.strip())
+                        if _auth_mode == UI_AUTH_LOGIN_TAB
+                        else sign_up(_email.strip(), _password.strip())
+                    )
+                if isinstance(result, dict):
+                    st.session_state.user = result
+                    success_msg = (
+                        UI_AUTH_SUCCESS_LOGIN
+                        if _auth_mode == UI_AUTH_LOGIN_TAB
+                        else UI_AUTH_SUCCESS_SIGNUP
+                    )
+                    st.success(success_msg)
+                    st.rerun()
+                else:
+                    if "FIREBASE_WEB_API_KEY" in result:
+                        st.warning(UI_AUTH_NO_API_KEY_MSG)
+                    else:
+                        st.error(result)
+
     st.divider()
 
     # ── Model selection ──────────────────────────────────────────────────────
@@ -283,7 +360,8 @@ with st.sidebar:
         "- `ANTHROPIC_API_KEY`\n"
         "- `OPENAI_API_KEY`\n"
         "- `GOOGLE_API_KEY`\n"
-        "- `SERPER_API_KEY` _(optional — enables pre-flight live search)_"
+        "- `SERPER_API_KEY` _(optional — enables pre-flight live search)_\n"
+        "- `FIREBASE_WEB_API_KEY` _(required for user authentication)_"
     )
 
     # ── Cloud Sync status indicator ───────────────────────────────────────────
@@ -311,7 +389,8 @@ with st.sidebar:
     st.divider()
     st.subheader(UI_HISTORY_TITLE)
 
-    history = load_history()
+    _uid     = (st.session_state.user or {}).get("uid")
+    history  = get_user_history(_uid) if _uid else load_history()
 
     if not history:
         st.caption(UI_HISTORY_EMPTY)
@@ -423,11 +502,19 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# Main area — question input & submit button
+# Main area — authentication gate
 # ---------------------------------------------------------------------------
 st.header(f"{APP_ICON} {APP_TITLE}")
 st.subheader(APP_SUBTITLE)
 st.write("")
+
+if not st.session_state.user:
+    st.info(UI_AUTH_GATE_MSG)
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Main area — question input & submit button (authenticated users only)
+# ---------------------------------------------------------------------------
 
 question = st.text_area(
     label=UI_ASK_LABEL,
@@ -955,7 +1042,8 @@ if start_button:
     except Exception:
         pass
 
-    _cached_path = save_to_history(_live_results, pdf_bytes=_pdf_for_cache)
+    _current_uid  = (st.session_state.user or {}).get("uid")
+    _cached_path  = save_to_history(_live_results, pdf_bytes=_pdf_for_cache, uid=_current_uid)
     if _cached_path:
         _live_results["pdf_cache_path"] = _cached_path
 

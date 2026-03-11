@@ -575,6 +575,28 @@ HARD_HALLUCINATION_TRIGGERS: tuple = (
 # ── Stage 0 progress UI strings ────────────────────────────────────────────
 UI_STAGE0_SEARCHING    = "🔍 **שלב 0:** סריקת נתוני אמת ב-Serper.dev..."
 UI_TECH_LOG_TITLE      = "פרוטוקול מחשבה טכני (למפתחים)"
+
+# ── Firebase Authentication UI strings ─────────────────────────────────────
+UI_AUTH_TITLE          = "🔐 Account Access"
+UI_AUTH_LOGIN_TAB      = "Login"
+UI_AUTH_SIGNUP_TAB     = "Sign Up"
+UI_AUTH_EMAIL_LABEL    = "Email"
+UI_AUTH_PASSWORD_LABEL = "Password"
+UI_AUTH_LOGIN_BTN      = "Login"
+UI_AUTH_SIGNUP_BTN     = "Create Account"
+UI_AUTH_LOGOUT_BTN     = "Logout"
+UI_AUTH_LOGGED_IN_AS   = "Logged in as"
+UI_AUTH_GATE_MSG       = (
+    "### 🔐 Login Required\n\n"
+    "Please use the **Login** panel in the sidebar to sign in or create "
+    "a free account to access the AI Council."
+)
+UI_AUTH_SUCCESS_LOGIN  = "✅ Welcome back!"
+UI_AUTH_SUCCESS_SIGNUP = "✅ Account created — welcome!"
+UI_AUTH_NO_API_KEY_MSG = (
+    "⚠️ `FIREBASE_WEB_API_KEY` is not set. "
+    "Authentication is unavailable."
+)
 UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
 
 # Mandatory instruction that follows the live data line.
