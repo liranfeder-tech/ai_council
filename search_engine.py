@@ -44,6 +44,7 @@ import requests
 _SERPER_URL = "https://google.serper.dev/search"
 
 # Topic keywords that trigger a pre-flight search.
+# Includes Hebrew terms so image-based coin/silver queries also fire.
 _TRIGGER_KEYWORDS = {
     "price", "cost", "rate", "exchange", "market", "silver", "gold",
     "bitcoin", "btc", "ethereum", "eth", "crypto", "stock", "usd",
@@ -51,6 +52,12 @@ _TRIGGER_KEYWORDS = {
     "worth", "value", "commodity", "interest", "inflation", "forex",
     "nasdaq", "dow", "s&p", "index", "bond", "yield", "oil", "crude",
     "gas", "platinum", "copper", "gdp", "salary", "wage", "tariff",
+    # Numismatic / collector
+    "numismatic", "collector", "mint", "graded", "pcgs", "ngc", "proof",
+    "bullion", "premium", "mintage", "uncirculated", "ms70", "ms69",
+    # Hebrew keywords
+    "מטבע", "שווי", "כסף", "זהב", "אספן", "אספנות", "מחיר", "ערך",
+    "פרמיה", "נדיר", "מנטה", "מוטבע",
 }
 
 # ---------------------------------------------------------------------------
@@ -135,7 +142,7 @@ def _build_broad_queries(question: str) -> List[str]:
     q = question.lower()
     queries = [question[:200]]      # always search the original question
 
-    if "gold" in q:
+    if "gold" in q or "זהב" in q:
         queries.append("gold spot price USD today")
     if any(kw in q for kw in ("bitcoin", "btc")):
         queries.append("bitcoin price USD today")
@@ -147,6 +154,39 @@ def _build_broad_queries(question: str) -> List[str]:
         queries.append("EUR USD exchange rate today")
     if "inflation" in q:
         queries.append("US inflation rate latest CPI data")
+
+    # ── Numismatic / coin collector searches ──────────────────────────────
+    _COIN_KW = ("coin", "מטבע", "numismatic", "collector", "mint", "bullion",
+                "proof", "uncirculated", "graded", "pcgs", "ngc",
+                "אספן", "אספנות")
+    if any(kw in q for kw in _COIN_KW):
+        # Identify the specific coin type from the question if possible
+        _KNOWN_COINS = [
+            ("american eagle",   "American Eagle 1oz silver coin price value collector"),
+            ("eagle",            "American Eagle 1oz silver coin price value collector"),
+            ("maple leaf",       "Canadian Maple Leaf 1oz silver coin price value"),
+            ("maple",            "Canadian Maple Leaf 1oz silver coin price value"),
+            ("krugerrand",       "Krugerrand silver coin price value collector"),
+            ("britannia",        "British Britannia 1oz silver coin price value"),
+            ("libertad",         "Mexican Libertad silver coin price value"),
+            ("philharmonic",     "Austrian Philharmonic silver coin price value"),
+            ("panda",            "Chinese Silver Panda coin price collector value"),
+            ("פנדה",             "Chinese Silver Panda coin price collector value"),
+            ("כסף",              "1oz silver coin collector numismatic premium value today"),
+        ]
+        matched = False
+        for keyword, search_query in _KNOWN_COINS:
+            if keyword in q:
+                queries.append(search_query)
+                matched = True
+                break
+        if not matched:
+            queries.append("1oz silver coin collector numismatic premium value today")
+
+        # Always add a generic collector premium query for silver coins
+        if any(kw in q for kw in ("silver", "כסף", "1oz", "one ounce", "troy")):
+            queries.append("silver coin collector premium vs spot price today")
+            queries.append("silver bullion coin numismatic value grading premium 2026")
 
     return queries
 
@@ -226,15 +266,30 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
         (context_block, citations)
         Both are empty / [] when the search is skipped or fails.
     """
-    if not any(kw in question.lower() for kw in _TRIGGER_KEYWORDS):
+    q_lower = question.lower()
+    if not any(kw in q_lower for kw in _TRIGGER_KEYWORDS):
         return "", []
     if not search_is_available():
         return "", []
 
+    queries = _build_broad_queries(question)
+
+    # When the question is short (≤80 chars) and contains coin/value keywords,
+    # the user likely uploaded an image without specifying the coin.
+    # Inject extra numismatic discovery queries.
+    _IMG_COIN_KW = ("coin", "מטבע", "שווי", "worth", "value", "ערך", "כסף",
+                    "אספן", "אספנות")
+    if len(question.strip()) <= 80 and any(kw in q_lower for kw in _IMG_COIN_KW):
+        queries += [
+            "silver coin price value identification collector premium today",
+            "how to identify silver coin value numismatic worth",
+            "silver coin spot vs collector premium grading value 2026",
+        ]
+
     seen_urls: set = set()
     all_results: List[dict] = []
 
-    for query in _build_broad_queries(question):
+    for query in queries:
         for hit in _serper_search(query, num=4):
             url = hit.get("link", "")
             if url and url not in seen_urls:
