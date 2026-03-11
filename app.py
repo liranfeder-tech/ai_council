@@ -21,8 +21,6 @@ debates and history replays without consuming any API tokens.
 
 from dotenv import load_dotenv
 import os
-import threading
-import time
 from typing import Optional
 
 load_dotenv()  # טוען את המפתחות מקובץ ה-.env
@@ -32,6 +30,7 @@ import streamlit as st
 from glossary import (
     APP_ICON,
     APP_PAGE_TITLE,
+    STATUS_DASHBOARD_CSS,
     APP_SUBTITLE,
     APP_TITLE,
     FALLBACK_NOTICE,
@@ -87,7 +86,7 @@ from history_manager import clear_history, firestore_status, load_history, save_
 
 
 # ---------------------------------------------------------------------------
-# Processing-UI assets  (spinner CSS + thought-stream copy)
+# Processing-UI assets  (spinner CSS + Status Dashboard)
 # ---------------------------------------------------------------------------
 
 # Rainbow rotating ring — pure CSS, zero Python thread needed.
@@ -122,50 +121,81 @@ _SPINNER_HTML = (
     '</div>'
 )
 
-# 10 rotating "mental activity" captions shown every ~3.5 s during processing.
-# The first two are Stage-0-specific so the user sees them early in the run.
-_THOUGHT_MSGS = [
-    "🔍 Stage 0: Fetching live silver spot price from global markets …",
-    "💱 Stage 0: Retrieving real-time USD/ILS exchange rate …",
-    "💉 Injecting verified market data into all model system prompts …",
-    "🧬 Overriding training-memory prices with live market anchor …",
-    "⚖️ Applying zero-trust factual verification across all agents …",
-    "🌐 Synthesizing intelligence from verified and conceptual sources …",
-    "🔬 Running peer-review cross-validation on expert opinions …",
-    "📊 Calibrating numerical claims against live market figures …",
-    "🧠 Applying Chain-of-Thought reasoning with live data anchor …",
-    "⚡ Assembling final expert consensus from verified sources …",
+# ── Status Dashboard — stage configs ──────────────────────────────────────
+# One entry per DSAD stage (0–4).  Colors map to:
+#   0 Search → Deep Blue   1 Thesis → Electric Purple   2 Audit → Sunset Orange
+#   3 Dialectic → Emerald  4 Synthesis → Gold
+_STAGE_CFG = [
+    {"icon": "🔍", "label": "Live\nSearch",  "color": "#1e40af", "bg": "#dbeafe", "glow": "rgba(30,64,175,0.45)"},
+    {"icon": "⚙️", "label": "Thesis",        "color": "#7c3aed", "bg": "#ede9fe", "glow": "rgba(124,58,237,0.45)"},
+    {"icon": "🔬", "label": "Audit",         "color": "#ea580c", "bg": "#ffedd5", "glow": "rgba(234,88,12,0.45)"},
+    {"icon": "💬", "label": "Dialectic",     "color": "#059669", "bg": "#d1fae5", "glow": "rgba(5,150,105,0.45)"},
+    {"icon": "🏛️", "label": "Synthesis",     "color": "#b45309", "bg": "#fef3c7", "glow": "rgba(180,83,9,0.45)"},
 ]
 
-_THOUGHT_STYLE = (
-    "color:#64748b;font-style:italic;text-align:center;"
-    "padding:4px 0;margin:0;"
-)
 
-
-def _start_thought_stream(placeholder: "st.delta_generator.DeltaGenerator") -> threading.Event:
+def render_status_dashboard(current_stage: int, completed_stages: set) -> str:
     """
-    Start a background thread that cycles _THOUGHT_MSGS every ~3.5 s,
-    writing each into `placeholder`.  Returns the stop Event.
-    """
-    stop = threading.Event()
+    Return an HTML string representing the 5-stage Status Dashboard.
 
-    def _loop() -> None:
-        idx = 0
-        while not stop.is_set():
-            msg = _THOUGHT_MSGS[idx % len(_THOUGHT_MSGS)]
-            try:
-                placeholder.markdown(
-                    f'<p style="{_THOUGHT_STYLE}">{msg}</p>',
-                    unsafe_allow_html=True,
+    Parameters
+    ----------
+    current_stage : int
+        Stage index currently executing (0–4), or -1 for none.
+    completed_stages : set[int]
+        Set of stage indices that have finished successfully.
+    """
+    items: list = []
+    for i, cfg in enumerate(_STAGE_CFG):
+        if i in completed_stages:
+            # Solid filled circle with glow — complete
+            circle_style = (
+                f"background:{cfg['color']};"
+                f"border:3px solid {cfg['color']};"
+                f"box-shadow:0 0 14px {cfg['glow']};"
+                "color:#ffffff;"
+            )
+            icon     = "✓"
+            lbl_style = "color:#475569;"
+        elif i == current_stage:
+            # Pulsing active circle
+            circle_style = (
+                f"background:{cfg['bg']};"
+                f"border:3px solid {cfg['color']};"
+                f"color:{cfg['color']};"
+                "animation:sd-pulse 1.4s ease-in-out infinite;"
+            )
+            icon     = cfg["icon"]
+            lbl_style = f"color:{cfg['color']};font-weight:700;"
+        else:
+            # Hollow pending circle
+            circle_style = (
+                "background:#f1f5f9;"
+                "border:3px solid #cbd5e1;"
+                "color:#94a3b8;"
+            )
+            icon     = cfg["icon"]
+            lbl_style = "color:#94a3b8;"
+
+        label_html = cfg["label"].replace("\n", "<br>")
+        items.append(
+            f'<div class="sd-item">'
+            f'<div class="sd-circle" style="{circle_style}">{icon}</div>'
+            f'<div class="sd-label" style="{lbl_style}">{label_html}</div>'
+            f'</div>'
+        )
+        # Connector between circles (skip after last)
+        if i < len(_STAGE_CFG) - 1:
+            if i in completed_stages:
+                next_color = _STAGE_CFG[i + 1]["color"]
+                conn_style = (
+                    f"background:linear-gradient(90deg,{cfg['color']},{next_color});"
                 )
-            except Exception:
-                pass
-            idx += 1
-            stop.wait(3.5)     # exits immediately when stop.set() is called
+            else:
+                conn_style = "background:#e2e8f0;"
+            items.append(f'<div class="sd-connector" style="{conn_style}"></div>')
 
-    threading.Thread(target=_loop, daemon=True).start()
-    return stop
+    return '<div class="sd-wrap">' + "".join(items) + "</div>"
 
 
 # ---------------------------------------------------------------------------
@@ -744,8 +774,8 @@ if start_button:
         st.warning(UI_WARNING_MIN_MODELS)
         st.stop()
 
-    # ── Inject spinner CSS once ───────────────────────────────────────────────
-    st.markdown(_SPINNER_CSS, unsafe_allow_html=True)
+    # ── Inject CSS (spinner ring + status dashboard) ─────────────────────────
+    st.markdown(_SPINNER_CSS + STATUS_DASHBOARD_CSS, unsafe_allow_html=True)
 
     _n_imgs = len(images_bytes)
     _main_label = (
@@ -756,22 +786,47 @@ if start_button:
 
     with st.status(_main_label, expanded=True) as status:
 
-        # Rainbow spinner (CSS animated — no Python thread required)
+        # Rainbow spinner ring (CSS animated)
         st.markdown(_SPINNER_HTML, unsafe_allow_html=True)
 
-        # Thought-stream: cycling mental-activity captions (background thread)
-        thought_ph = st.empty()
-        stop_thoughts = _start_thought_stream(thought_ph)
+        # ── Status Dashboard placeholders ─────────────────────────────────────
+        dashboard_ph = st.empty()   # animated circle row — re-rendered each stage
+        log_ph       = st.empty()   # styled log panel — re-rendered each callback
 
-        # ── Callbacks — cumulative step log (each call appends a new line) ───
-        # stage0_cb is called twice: fraction=0.0 (search start) and 1.0 (done)
-        # stage1-4 callbacks are called once per model/pair completion.
-        # st.markdown() is used (not st.write) so the global RTL_CSS applies
-        # correctly to Hebrew text in the log lines.
+        _state: dict = {"stage": -1, "completed": set(), "log": []}
+
+        def _refresh_ui() -> None:                                   # noqa: E306
+            """Re-render both the circle dashboard and the log panel."""
+            try:
+                dashboard_ph.markdown(
+                    render_status_dashboard(_state["stage"], _state["completed"]),
+                    unsafe_allow_html=True,
+                )
+                if _state["log"]:
+                    lines_html = "".join(
+                        f'<div class="sd-log-line">{ln}</div>'
+                        for ln in _state["log"][-12:]
+                    )
+                    log_ph.markdown(
+                        f'<div class="sd-log-wrap">{lines_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                pass
+
+        _refresh_ui()   # initial render — all circles pending
+
+        # ── Stage callbacks — each updates dashboard + appends to log ─────────
 
         def stage0_cb(fraction: float, text: str) -> None:          # noqa: E306
             try:
-                st.markdown(text)
+                if fraction < 1.0:
+                    _state["stage"] = 0
+                else:
+                    _state["completed"].add(0)
+                    _state["stage"] = -1
+                _state["log"].append(text)
+                _refresh_ui()
                 _lbl = "🔍 Stage 0 — Complete" if fraction >= 1.0 else "🔍 Stage 0 — searching …"
                 status.update(label=_lbl)
             except Exception:
@@ -779,28 +834,52 @@ if start_button:
 
         def stage1_cb(fraction: float, text: str) -> None:          # noqa: E306
             try:
-                st.markdown(f"⚙️ **Stage 1** — {text}")
+                if fraction >= 1.0:
+                    _state["completed"].add(1)
+                    _state["stage"] = -1
+                else:
+                    _state["stage"] = 1
+                _state["log"].append(f"⚙️ Stage 1 — {text}")
+                _refresh_ui()
                 status.update(label="⚙️ Stage 1 — running …")
             except Exception:
                 pass
 
         def stage2_cb(fraction: float, text: str) -> None:          # noqa: E306
             try:
-                st.markdown(f"🔬 **Stage 2** — {text}")
+                if fraction >= 1.0:
+                    _state["completed"].add(2)
+                    _state["stage"] = -1
+                else:
+                    _state["stage"] = 2
+                _state["log"].append(f"🔬 Stage 2 — {text}")
+                _refresh_ui()
                 status.update(label="🔬 Stage 2 — running …")
             except Exception:
                 pass
 
         def stage3_cb(fraction: float, text: str) -> None:          # noqa: E306
             try:
-                st.markdown(f"💬 **Stage 3** — {text}")
+                if fraction >= 1.0:
+                    _state["completed"].add(3)
+                    _state["stage"] = -1
+                else:
+                    _state["stage"] = 3
+                _state["log"].append(f"💬 Stage 3 — {text}")
+                _refresh_ui()
                 status.update(label="💬 Stage 3 — running …")
             except Exception:
                 pass
 
         def stage4_cb(fraction: float, text: str) -> None:          # noqa: E306
             try:
-                st.markdown(f"🏛️ **Stage 4** — {text}")
+                if fraction >= 1.0:
+                    _state["completed"].add(4)
+                    _state["stage"] = -1
+                else:
+                    _state["stage"] = 4
+                _state["log"].append(f"🏛️ Stage 4 — {text}")
+                _refresh_ui()
                 status.update(label="🏛️ Stage 4 — running …")
             except Exception:
                 pass
@@ -818,9 +897,10 @@ if start_button:
             stage4_cb=stage4_cb,
         )
 
-        # ── Tear down the thought-stream (step log lines persist) ─────────────
-        stop_thoughts.set()
-        thought_ph.empty()
+        # ── Final state: all circles complete ─────────────────────────────────
+        _state["completed"] = {0, 1, 2, 3, 4}
+        _state["stage"]     = -1
+        _refresh_ui()
 
         status.update(
             label="✅ Council deliberation complete — results ready!",

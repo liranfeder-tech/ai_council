@@ -663,3 +663,87 @@ RTL_CSS               = """
 }
 </style>
 """
+
+# CSS for the animated Status Dashboard shown during debate processing.
+# Injected once at debate start; animation names are referenced from Python-generated HTML.
+STATUS_DASHBOARD_CSS = """
+<style>
+/* ── Status Dashboard keyframes ─────────────────────────────────────── */
+@keyframes sd-pulse {
+    0%,100% { transform: scale(1);    }
+    50%      { transform: scale(1.12); }
+}
+@keyframes sd-fade-in {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* ── Circle row ──────────────────────────────────────────────────────── */
+.sd-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 14px 0 6px;
+    flex-wrap: wrap;
+}
+.sd-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    min-width: 66px;
+}
+.sd-circle {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15em;
+    font-weight: 700;
+    transition: background 0.25s, border-color 0.25s, box-shadow 0.25s;
+    direction: ltr;
+}
+.sd-connector {
+    width: 22px;
+    height: 3px;
+    background: #e2e8f0;
+    margin-top: 23px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+.sd-label {
+    font-size: 0.61em;
+    font-weight: 600;
+    text-align: center;
+    max-width: 66px;
+    line-height: 1.3;
+    letter-spacing: 0.02em;
+    direction: ltr;
+}
+
+/* ── Stage Log ───────────────────────────────────────────────────────── */
+.sd-log-wrap {
+    background: rgba(248, 250, 252, 0.92);
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin: 6px 0 2px;
+    font-size: 0.80em;
+    color: #475569;
+    font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+    direction: ltr;
+    text-align: left;
+}
+.sd-log-line {
+    animation: sd-fade-in 0.2s ease;
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+    line-height: 1.55;
+}
+.sd-log-line:last-child { border-bottom: none; }
+</style>
+"""
