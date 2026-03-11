@@ -30,7 +30,8 @@ import streamlit as st
 from glossary import (
     APP_ICON,
     APP_PAGE_TITLE,
-    STATUS_DASHBOARD_CSS,
+    MISSION_CONTROL_CSS,
+    RELIABILITY_GAUGE_HTML,
     APP_SUBTITLE,
     APP_TITLE,
     FALLBACK_NOTICE,
@@ -77,6 +78,7 @@ from glossary import (
     UI_SPINNER_STAGE2,
     UI_SPINNER_STAGE3,
     UI_SUBMIT_BUTTON,
+    UI_TECH_LOG_TITLE,
     UI_UNVERIFIED_WARNING,
     UI_WARNING_MIN_MODELS,
 )
@@ -196,6 +198,36 @@ def render_status_dashboard(current_stage: int, completed_stages: set) -> str:
             items.append(f'<div class="sd-connector" style="{conn_style}"></div>')
 
     return '<div class="sd-wrap">' + "".join(items) + "</div>"
+
+
+def render_reliability_gauge(model_label: str, score: int) -> str:
+    """Return inline HTML/SVG speedometer for one model's reliability score."""
+    import math as _math
+    import uuid as _uuid
+
+    uid         = _uuid.uuid4().hex[:8]
+    angle       = (score / 100 * 180) - 90
+    math_angle  = _math.radians(180 - score * 1.8)
+    score_x     = 100 + 80 * _math.cos(math_angle)
+    score_y     = 100 - 80 * _math.sin(math_angle)
+
+    if score >= 80:
+        color = "#10b981"; label = "High Consistency"
+    elif score >= 50:
+        color = "#f59e0b"; label = "Partial Revision"
+    else:
+        color = "#ef4444"; label = "Major Revision"
+
+    return RELIABILITY_GAUGE_HTML.format(
+        uid=uid,
+        score=score,
+        score_x=f"{score_x:.1f}",
+        score_y=f"{score_y:.1f}",
+        angle=f"{angle:.1f}",
+        color=color,
+        label=label,
+        model_label=model_label,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -660,20 +692,19 @@ def _display_results(results: dict) -> None:
     if not citations and not final.startswith("ERROR:") and _re.search(r"\d", final):
         st.error(UI_UNVERIFIED_WARNING)
 
-    # ── Reliability Scorecard ─────────────────────────────────────────────────
+    # ── Reliability Dashboard (SVG speedometers) ──────────────────────────────
     dialectic          = results.get("dialectic", {})
     reliability_scores = results.get("reliability_scores", {})
 
     if dialectic:
-        st.markdown("#### 📊 Reliability Scorecard")
-        chips = []
-        for key in dialectic:
-            score = reliability_scores.get(key, 100)
-            sc    = ReliabilityScorecard(key, dialectic[key])
-            sc.score = score                    # use engine-computed score
-            chips.append(sc.render_chip())
+        st.markdown("#### 📊 Reliability Dashboard")
+        gauges_html = "".join(
+            render_reliability_gauge(MODELS[key]["label"], reliability_scores.get(key, 100))
+            for key in dialectic
+        )
         st.markdown(
-            '<div class="scorecard-row">' + "".join(chips) + "</div>",
+            f'<div style="display:flex;gap:16px;flex-wrap:wrap;'
+            f'justify-content:center;margin:8px 0 20px">{gauges_html}</div>',
             unsafe_allow_html=True,
         )
 
@@ -774,8 +805,8 @@ if start_button:
         st.warning(UI_WARNING_MIN_MODELS)
         st.stop()
 
-    # ── Inject CSS (spinner ring + status dashboard) ─────────────────────────
-    st.markdown(_SPINNER_CSS + STATUS_DASHBOARD_CSS, unsafe_allow_html=True)
+    # ── Inject CSS (spinner ring + mission control dashboard) ────────────────
+    st.markdown(_SPINNER_CSS + MISSION_CONTROL_CSS, unsafe_allow_html=True)
 
     _n_imgs = len(images_bytes)
     _main_label = (
@@ -784,19 +815,22 @@ if start_button:
         else "🤖 AI Council is deliberating …"
     )
 
+    # Mission Control circle row — lives OUTSIDE st.status so it stays visible
+    # while the spinner/log panel collapses.
+    dashboard_ph = st.empty()
+
     with st.status(_main_label, expanded=True) as status:
 
         # Rainbow spinner ring (CSS animated)
         st.markdown(_SPINNER_HTML, unsafe_allow_html=True)
 
-        # ── Status Dashboard placeholders ─────────────────────────────────────
-        dashboard_ph = st.empty()   # animated circle row — re-rendered each stage
-        log_ph       = st.empty()   # styled log panel — re-rendered each callback
+        # ── Log placeholder inside the status block ───────────────────────────
+        log_ph = st.empty()   # collapsible tech log — re-rendered each callback
 
         _state: dict = {"stage": -1, "completed": set(), "log": []}
 
         def _refresh_ui() -> None:                                   # noqa: E306
-            """Re-render both the circle dashboard and the log panel."""
+            """Re-render the circle dashboard and the collapsible log panel."""
             try:
                 dashboard_ph.markdown(
                     render_status_dashboard(_state["stage"], _state["completed"]),
@@ -808,7 +842,10 @@ if start_button:
                         for ln in _state["log"][-12:]
                     )
                     log_ph.markdown(
-                        f'<div class="sd-log-wrap">{lines_html}</div>',
+                        f'<details class="sd-details">'
+                        f'<summary class="sd-summary">{UI_TECH_LOG_TITLE}</summary>'
+                        f'<div class="sd-log-wrap">{lines_html}</div>'
+                        f'</details>',
                         unsafe_allow_html=True,
                     )
             except Exception:

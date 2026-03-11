@@ -30,6 +30,7 @@ from typing import Callable, List, Optional
 
 from glossary import (
     CONTEXTUAL_HALLUCINATION_TRIGGERS,
+    HARD_HALLUCINATION_TRIGGERS,
     COUNCIL_CONSENSUS_PROMPT,
     EDUCATIONAL_FRAMING_NOTE,
     FALLBACK_MODEL_KEY,
@@ -578,12 +579,13 @@ def run_council_debate(
     )
     reliability_scores: dict[str, int] = {}
     for key, resp in dialectic.items():
-        low             = resp.lower()
-        retraction_hits = sum(1 for t in _RETRACTION_TRIGGERS           if t in low)
+        low                = resp.lower()
+        retraction_hits    = sum(1 for t in _RETRACTION_TRIGGERS              if t in low)
         hallucination_hits = sum(1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low)
+        hard_hits          = sum(1 for t in HARD_HALLUCINATION_TRIGGERS        if t in low)
         reliability_scores[key] = max(
             0,
-            100 - retraction_hits * 20 - hallucination_hits * 40,
+            100 - retraction_hits * 20 - hallucination_hits * 40 - hard_hits * 50,
         )
 
     # ── Stage 4: Consensus Synthesis ──────────────────────────────────────

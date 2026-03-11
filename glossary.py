@@ -565,8 +565,16 @@ CONTEXTUAL_HALLUCINATION_TRIGGERS: tuple = (
     "taking the provided", "if the figure is",
 )
 
+# Phrases that indicate the model explicitly reframed LIVE Stage 0 data
+# as hypothetical/conditional.  Each match deducts 50 points (hard penalty).
+HARD_HALLUCINATION_TRIGGERS: tuple = (
+    "hypothetical",
+    "if correct",
+)
+
 # ── Stage 0 progress UI strings ────────────────────────────────────────────
 UI_STAGE0_SEARCHING    = "🔍 **שלב 0:** סריקת נתוני אמת ב-Serper.dev..."
+UI_TECH_LOG_TITLE      = "פרוטוקול מחשבה טכני (למפתחים)"
 UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
 
 # Mandatory instruction that follows the live data line.
@@ -664,11 +672,11 @@ RTL_CSS               = """
 </style>
 """
 
-# CSS for the animated Status Dashboard shown during debate processing.
+# CSS for the Mission Control Dashboard shown during debate processing.
 # Injected once at debate start; animation names are referenced from Python-generated HTML.
-STATUS_DASHBOARD_CSS = """
+MISSION_CONTROL_CSS = """
 <style>
-/* ── Status Dashboard keyframes ─────────────────────────────────────── */
+/* ── Mission Control keyframes ───────────────────────────────────────── */
 @keyframes sd-pulse {
     0%,100% { transform: scale(1);    }
     50%      { transform: scale(1.12); }
@@ -725,13 +733,29 @@ STATUS_DASHBOARD_CSS = """
     direction: ltr;
 }
 
-/* ── Stage Log ───────────────────────────────────────────────────────── */
+/* ── Tech Log (collapsible <details>) ────────────────────────────────── */
+.sd-details { margin: 6px 0 2px; }
+.sd-summary {
+    cursor: pointer;
+    font-size: 0.78em;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.04em;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: rgba(241, 245, 249, 0.85);
+    list-style: none;
+    user-select: none;
+    direction: ltr;
+}
+.sd-summary::-webkit-details-marker { display: none; }
+.sd-summary::before { content: "▶ "; font-size: 0.75em; }
+details[open] .sd-summary::before { content: "▼ "; }
 .sd-log-wrap {
     background: rgba(248, 250, 252, 0.92);
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
+    border-radius: 0 0 8px 8px;
     padding: 8px 14px;
-    margin: 6px 0 2px;
     font-size: 0.80em;
     color: #475569;
     font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
@@ -746,4 +770,47 @@ STATUS_DASHBOARD_CSS = """
 }
 .sd-log-line:last-child { border-bottom: none; }
 </style>
+"""
+
+# ── Reliability Gauge — SVG speedometer template ───────────────────────────
+# Placeholders (all filled by render_reliability_gauge() in app.py):
+#   {uid}         — unique 8-char hex used for scoped CSS animation names
+#   {score}       — integer 0-100 shown inside the gauge
+#   {score_x}     — SVG x of the arc endpoint (pre-calculated float string)
+#   {score_y}     — SVG y of the arc endpoint (pre-calculated float string)
+#   {angle}       — CSS needle rotation in degrees (-90 = left, +90 = right)
+#   {color}       — hex colour matching the score tier
+#   {label}       — tier label ("High Consistency" / "Partial Revision" / etc.)
+#   {model_label} — human-readable model name shown below the gauge
+#
+# Zone boundaries (hardcoded in the track):
+#   Red  0-50  : (20,100) → (100, 20)
+#   Amber 50-80: (100, 20) → (165, 53)
+#   Green 80-100:(165, 53) → (180,100)
+RELIABILITY_GAUGE_HTML = """\
+<style>
+@keyframes rg-swing-{uid} {{
+    from {{ transform: rotate(-90deg); }}
+    to   {{ transform: rotate({angle}deg); }}
+}}
+.rg-needle-{uid} {{
+    transform-origin: 100px 100px;
+    transform: rotate({angle}deg);
+    animation: rg-swing-{uid} 1.2s cubic-bezier(.22,.61,.36,1) 0.3s both;
+}}
+</style>
+<div style="text-align:center;display:inline-block;min-width:148px;padding:6px 8px">
+  <svg viewBox="0 0 200 128" width="148" height="95" xmlns="http://www.w3.org/2000/svg">
+    <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#e2e8f0" stroke-width="14" stroke-linecap="round"/>
+    <path d="M 20 100 A 80 80 0 0 1 100 20"  fill="none" stroke="#ef4444" stroke-width="14" stroke-linecap="butt" opacity="0.22"/>
+    <path d="M 100 20  A 80 80 0 0 1 165 53" fill="none" stroke="#f59e0b" stroke-width="14" stroke-linecap="butt" opacity="0.22"/>
+    <path d="M 165 53  A 80 80 0 0 1 180 100" fill="none" stroke="#10b981" stroke-width="14" stroke-linecap="butt" opacity="0.22"/>
+    <path d="M 20 100 A 80 80 0 0 1 {score_x} {score_y}" fill="none" stroke="{color}" stroke-width="14" stroke-linecap="round"/>
+    <line x1="100" y1="100" x2="100" y2="28" stroke="{color}" stroke-width="3.5" stroke-linecap="round" class="rg-needle-{uid}"/>
+    <circle cx="100" cy="100" r="7" fill="{color}"/>
+    <text x="100" y="120" text-anchor="middle" font-size="20" font-weight="800" fill="{color}" font-family="system-ui,sans-serif">{score}</text>
+  </svg>
+  <div style="font-size:0.72em;font-weight:700;color:#475569;letter-spacing:0.05em;text-transform:uppercase;margin-top:1px;line-height:1.3">{model_label}</div>
+  <div style="font-size:0.68em;font-weight:600;margin-top:2px;color:{color}">{label}</div>
+</div>\
 """
