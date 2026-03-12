@@ -228,14 +228,6 @@ def _build_broad_queries(question: str) -> List[str]:
     if any(kw in q for kw in _CRYPTO_KW):
         queries.append("crypto market conditions 2026 regulatory status Israel")
 
-    # ── Technology / AI / software ─────────────────────────────────────────
-    _TECH_KW = (
-        "ai", "artificial intelligence", "בינה מלאכותית", "gpt", "claude",
-        "software", "tech stock", "semiconductor", "chip", "quantum",
-    )
-    if any(kw in q for kw in _TECH_KW) and not any(kw in q for kw in _COIN_KW):
-        queries.append("AI technology sector market 2026 latest")
-
     # ── Numismatic / coin collector searches ──────────────────────────────
     _COIN_KW = ("coin", "מטבע", "numismatic", "collector", "mint", "bullion",
                 "proof", "uncirculated", "graded", "pcgs", "ngc",
@@ -266,6 +258,14 @@ def _build_broad_queries(question: str) -> List[str]:
         if any(kw in q for kw in ("silver", "כסף", "1oz", "one ounce", "troy")):
             queries.append("silver coin collector premium vs spot price today")
             queries.append("silver bullion coin numismatic value grading premium 2026")
+
+    # ── Technology / AI / software (defined after _COIN_KW to avoid NameError)
+    _TECH_KW = (
+        "ai", "artificial intelligence", "בינה מלאכותית", "gpt", "claude",
+        "software", "tech stock", "semiconductor", "chip", "quantum",
+    )
+    if any(kw in q for kw in _TECH_KW) and not any(kw in q for kw in _COIN_KW):
+        queries.append("AI technology sector market 2026 latest")
 
     return queries
 
