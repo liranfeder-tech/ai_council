@@ -95,10 +95,15 @@ def sign_in(email: str, password: str) -> Union[UserInfo, str]:
 
     Returns a user dict on success or an error string on failure.
     """
-    return _post(
+    result = _post(
         _SIGN_IN_URL,
         {"email": email, "password": password, "returnSecureToken": True},
     )
+    if isinstance(result, dict):
+        # Firebase sign-in response does NOT include emailVerified — fetch it.
+        verified = get_email_verified(result["id_token"])
+        result["email_verified"] = verified is True
+    return result
 
 
 def sign_up(email: str, password: str) -> Union[UserInfo, str]:
