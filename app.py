@@ -106,6 +106,9 @@ from glossary import (
     UI_RESEND_SUCCESS,
     UI_RESEND_VERIFICATION,
     UI_STILL_NOT_VERIFIED,
+    UI_FOLLOWUP_LABEL,
+    UI_FOLLOWUP_PLACEHOLDER,
+    UI_FOLLOWUP_SUBMIT_BTN,
     UI_SUBMIT_BUTTON,
     UI_TECH_LOG_TITLE,
     UI_UNVERIFIED_WARNING,
@@ -996,10 +999,22 @@ def _display_results(results: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Debate execution — runs only when the submit button is pressed
+# Debate execution — runs when the submit button is pressed OR when a
+# follow-up question was submitted from the follow-up panel.
 # ---------------------------------------------------------------------------
-if start_button:
-    if not question.strip() and not images_bytes:
+
+# ── Follow-up trigger: consume pending follow-up from session state ────────
+_fup_question = st.session_state.pop("_pending_followup", None)
+_fup_ctx      = st.session_state.pop("_followup_ctx", None)
+
+if start_button or _fup_question:
+    # Resolve the effective question and context for this run
+    _active_question   = _fup_question or question
+    _previous_ctx      = _fup_ctx      # None for regular questions
+    _active_images     = [] if _fup_question else images_bytes
+    _active_images_mime = [] if _fup_question else images_mime
+
+    if not _active_question.strip() and not _active_images:
         st.warning("Please provide a question or upload at least one image.")
         st.stop()
 
@@ -1008,13 +1023,12 @@ if start_button:
         st.warning(UI_WARNING_MIN_MODELS)
         st.stop()
 
-    # ── Cache-hit check: reuse saved result to avoid redundant API costs ─────
-    # Only applies to text questions (image queries are always unique).
-    # Skipped when the user explicitly clicked the "Force rerun" button.
-    if question.strip() and not images_bytes and not st.session_state._force_rerun:
+    # ── Cache-hit check: skip for follow-ups (always unique) ─────────────────
+    if _active_question.strip() and not _active_images and not st.session_state._force_rerun \
+            and not _fup_question:
         _uid_for_cache = (st.session_state.user or {}).get("uid")
         _hist_for_cache = get_user_history(_uid_for_cache) if _uid_for_cache else load_history()
-        _q_norm = question.strip().lower()
+        _q_norm = _active_question.strip().lower()
         _hit = next(
             (e for e in _hist_for_cache if e.get("question", "").strip().lower() == _q_norm),
             None,
@@ -1041,11 +1055,12 @@ if start_button:
     # ── Inject CSS (spinner ring + mission control dashboard) ────────────────
     st.markdown(_SPINNER_CSS + MISSION_CONTROL_CSS, unsafe_allow_html=True)
 
-    _n_imgs = len(images_bytes)
+    _n_imgs = len(_active_images)
     _main_label = (
         f"👁️ Vision Council — analysing {_n_imgs} image{'s' if _n_imgs > 1 else ''} …"
-        if images_bytes
-        else "🤖 AI Council is deliberating …"
+        if _active_images
+        else ("🔄 AI Council — Follow-up Debate …" if _fup_question
+              else "🤖 AI Council is deliberating …")
     )
 
     # Mission Control circle row — lives OUTSIDE st.status so it stays visible
@@ -1157,9 +1172,10 @@ if start_button:
         # ── Run the full 4-stage DSAD debate ─────────────────────────────────
         _live_results = run_council_debate(
             active_keys=selected_keys,
-            question=question,
-            images=images_bytes,
-            images_mime=images_mime,
+            question=_active_question,
+            images=_active_images,
+            images_mime=_active_images_mime,
+            previous_context=_previous_ctx,
             stage0_cb=stage0_cb,
             stage1_cb=stage1_cb,
             stage2_cb=stage2_cb,
@@ -1204,3 +1220,21 @@ if start_button:
 # ---------------------------------------------------------------------------
 if st.session_state.current_results:
     _display_results(st.session_state.current_results)
+
+    # ── Follow-up question panel ───────────────────────────────────────────
+    st.divider()
+    _fup_key = f"followup_{st.session_state._query_counter}"
+    _fup_q   = st.text_area(
+        label=UI_FOLLOWUP_LABEL,
+        placeholder=UI_FOLLOWUP_PLACEHOLDER,
+        height=90,
+        key=_fup_key,
+    )
+    if st.button(UI_FOLLOWUP_SUBMIT_BTN, type="primary",
+                 disabled=not bool((_fup_q or "").strip())):
+        st.session_state["_pending_followup"]  = _fup_q.strip()
+        st.session_state["_followup_ctx"]      = st.session_state.current_results
+        st.session_state.current_results       = None
+        st.session_state.from_history          = False
+        st.session_state._query_counter       += 1
+        st.rerun()

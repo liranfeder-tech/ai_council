@@ -39,6 +39,7 @@ from glossary import (
     PROMPT_CRITIQUE,
     PROMPT_DIALECTIC,
     PROMPT_INITIAL,
+    FOLLOWUP_CONTEXT_BLOCK,
     STAGE0_LIVE_LABEL,
     STAGE0_MARKET_INSTRUCTION,
     TEMPORAL_AUTHORITY_CLAUSE,
@@ -444,6 +445,7 @@ def run_council_debate(
     question: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    previous_context: Optional[dict] = None,
     stage0_cb: Optional[ProgressCallback] = None,
     stage1_cb: Optional[ProgressCallback] = None,
     stage2_cb: Optional[ProgressCallback] = None,
@@ -549,6 +551,18 @@ def run_council_debate(
         )
     if broad_block:
         context_parts.append(broad_block)
+
+    # ── Follow-up: prepend prior-debate context so every model reads it first
+    if previous_context:
+        prev_q      = previous_context.get("question", "")
+        prev_answer = previous_context.get("final_answer", "")
+        context_parts.insert(
+            0,
+            FOLLOWUP_CONTEXT_BLOCK.format(
+                prev_question=prev_q,
+                prev_answer=prev_answer[:3000],   # cap to avoid token overflow
+            ),
+        )
 
     verified_context = "\n\n".join(context_parts)
 

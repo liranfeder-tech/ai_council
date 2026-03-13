@@ -672,6 +672,34 @@ DAILY_QUERY_LIMIT      = 5
 UI_DAILY_USAGE_TPL     = "📊 שימוש יומי: {count}/{limit} שאילתות"
 UI_QUOTA_REACHED       = "🚀 הגעת למכסה היומית שלך. נתראה מחר!"
 
+# ── Follow-up question feature ───────────────────────────────────────────────
+UI_FOLLOWUP_LABEL          = "💬 שאלת המשך"
+UI_FOLLOWUP_PLACEHOLDER    = "הקלד שאלת המשך בהתבסס על הדיון למעלה..."
+UI_FOLLOWUP_SUBMIT_BTN     = "🔄 הפעל דיון המשך"
+
+# Context block injected into verified_context when a follow-up debate is run.
+# {prev_question} and {prev_answer} are substituted at runtime.
+FOLLOWUP_CONTEXT_BLOCK = """\
+╔══════════════════════════════════════════════════════════════════╗
+║               FOLLOW-UP QUESTION — PRIOR DEBATE CONTEXT         ║
+╠══════════════════════════════════════════════════════════════════╣
+║  This is a follow-up to a previous council debate.              ║
+║  Use the prior debate context below as ESTABLISHED FOUNDATION.  ║
+║  Do NOT repeat what was already settled — build upon it.        ║
+╚══════════════════════════════════════════════════════════════════╝
+
+ORIGINAL QUESTION (previous debate):
+{prev_question}
+
+FINAL SYNTHESISED ANSWER FROM PREVIOUS DEBATE:
+{prev_answer}
+
+══════════════════════════════════════════════════════════════════
+Now answer the NEW follow-up question that follows, treating the
+above as verified prior-debate consensus.
+══════════════════════════════════════════════════════════════════
+"""
+
 # ── Email verification ───────────────────────────────────────────────────────
 UI_EMAIL_NOT_VERIFIED  = "📧 נא לאמת את כתובת המייל שלך כדי להמשיך."
 UI_RESEND_VERIFICATION = "📨 שלח מייל אימות מחדש"
