@@ -152,6 +152,39 @@ def _call_google(
     return response.text, []
 
 
+def _call_xai(
+    model_id: str,
+    prompt: str,
+    images: Optional[List[bytes]] = None,
+    images_mime: Optional[List[str]] = None,
+) -> str:
+    """Call the xAI (Grok) API using the OpenAI-compatible client."""
+    client = openai.OpenAI(
+        api_key=os.environ["XAI_API_KEY"],
+        base_url="https://api.x.ai/v1",
+    )
+    images      = images      or []
+    images_mime = images_mime or []
+
+    if images:
+        content = [{"type": "text", "text": prompt}]
+        for img_bytes, img_mime in zip(images, images_mime):
+            b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{img_mime};base64,{b64}"},
+            })
+    else:
+        content = prompt
+
+    response = client.chat.completions.create(
+        model=model_id,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=4096,
+    )
+    return response.choices[0].message.content
+
+
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
@@ -186,6 +219,8 @@ def call_model_with_citations(
             return _call_anthropic(model_id, prompt, images, images_mime), []
         elif provider == "openai":
             return _call_openai(model_id, prompt, images, images_mime), []
+        elif provider == "xai":
+            return _call_xai(model_id, prompt, images, images_mime), []
         else:
             return f"ERROR: Unsupported provider '{provider}' for model '{model_key}'.", []
 
@@ -237,6 +272,9 @@ def call_model(
 
         elif provider == "openai":
             return _call_openai(model_id, prompt, images, images_mime)
+
+        elif provider == "xai":
+            return _call_xai(model_id, prompt, images, images_mime)
 
         elif provider == "google":
             text, citations = _call_google(model_id, prompt, images, images_mime)

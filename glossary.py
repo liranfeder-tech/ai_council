@@ -58,6 +58,12 @@ MODELS: dict[str, dict] = {
         "provider": "google",
         "color":    "#6366F1",   # indigo
     },
+    "grok": {
+        "id":       "grok-3",
+        "label":    "Grok 3 (xAI)",
+        "provider": "xai",
+        "color":    "#EF4444",   # red
+    },
 }
 
 # ---------------------------------------------------------------------------
