@@ -717,7 +717,12 @@ UI_RESEND_VERIFICATION = "📨 שלח מייל אימות מחדש"
 UI_RESEND_SUCCESS      = "✅ מייל אימות נשלח! בדוק את תיבת הדואר שלך."
 UI_REFRESH_VERIFY_BTN  = "🔄 אימתתי — רענן סטטוס"
 UI_STILL_NOT_VERIFIED  = "⚠️ המייל עדיין לא אומת. בדוק את תיבת הדואר ולחץ על הקישור."
-UI_STAGE0_COMPLETE_TPL = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
+# Shown when commodity data (silver + ILS) was found
+UI_STAGE0_COMPLETE_COMMODITY = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
+# Shown when general search results were found (non-commodity query)
+UI_STAGE0_COMPLETE_GENERAL   = "✅ **Stage 0 Complete:** {n} live results fetched for your query"
+# Shown when Serper is unavailable or returned nothing
+UI_STAGE0_COMPLETE_NONE      = "⚠️ **Stage 0:** No live data available (Serper unavailable)"
 
 # Mandatory instruction that follows the live data line.
 # Written to be maximally unambiguous: discard training memory for prices.

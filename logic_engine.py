@@ -44,7 +44,9 @@ from glossary import (
     STAGE0_MARKET_INSTRUCTION,
     TEMPORAL_AUTHORITY_CLAUSE,
     TEMPORAL_AUTHORITY_CLAUSE_GENERAL,
-    UI_STAGE0_COMPLETE_TPL,
+    UI_STAGE0_COMPLETE_COMMODITY,
+    UI_STAGE0_COMPLETE_GENERAL,
+    UI_STAGE0_COMPLETE_NONE,
     UI_STAGE0_SEARCHING,
     VISION_MODE_PROMPT,
 )
@@ -507,13 +509,18 @@ def run_council_debate(
 
     # Stage 0 complete — log the live values to the UI
     if stage0_cb:
-        stage0_cb(
-            1.0,
-            UI_STAGE0_COMPLETE_TPL.format(
-                silver=silver_price if silver_price != "N/A" else "N/A (search unavailable)",
-                rate=exchange_rate  if exchange_rate != "N/A" else "N/A",
-            ),
-        )
+        has_commodity_data_early = silver_price != "N/A" or exchange_rate != "N/A"
+        if has_commodity_data_early:
+            _stage0_msg = UI_STAGE0_COMPLETE_COMMODITY.format(
+                silver=silver_price,
+                rate=exchange_rate,
+            )
+        elif broad_block:
+            _n_results = broad_block.count("\n•") or broad_block.count("\n-") or "some"
+            _stage0_msg = UI_STAGE0_COMPLETE_GENERAL.format(n=_n_results)
+        else:
+            _stage0_msg = UI_STAGE0_COMPLETE_NONE
+        stage0_cb(1.0, _stage0_msg)
 
     current_date  = datetime.now().strftime("%A, %B %d, %Y")
     context_parts: List[str] = []
