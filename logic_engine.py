@@ -21,8 +21,6 @@ Design notes
 - When image_bytes is provided all stages operate in Vision Expert Mode.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import json
 import re
@@ -69,7 +67,7 @@ ProgressCallback = Callable[[float, str], None]   # (fraction 0-1, status text)
 class DisagreementPoint(TypedDict):
     point_id:   int
     summary:    str
-    model_keys: list[str]
+    model_keys: List[str]
     excerpt:    str
 
 
