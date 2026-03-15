@@ -400,6 +400,7 @@ with st.sidebar:
         "- `ANTHROPIC_API_KEY`\n"
         "- `OPENAI_API_KEY`\n"
         "- `GOOGLE_API_KEY`\n"
+        "- `XAI_API_KEY`\n"
         "- `SERPER_API_KEY` _(optional — enables pre-flight live search)_\n"
         "- `FIREBASE_WEB_API_KEY` _(required for user authentication)_"
     )
