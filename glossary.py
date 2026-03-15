@@ -680,6 +680,7 @@ UI_CACHE_RERUN_BTN     = "▶️ הרץ בכל זאת (API)"
 
 # ── Daily usage quota ────────────────────────────────────────────────────────
 DAILY_QUERY_LIMIT      = 5
+API_TIMEOUT_SECONDS    = 90   # max seconds to wait for any single model API call
 UI_DAILY_USAGE_TPL     = "📊 שימוש יומי: {count}/{limit} שאילתות"
 UI_QUOTA_REACHED       = "🚀 הגעת למכסה היומית שלך. נתראה מחר!"
 

@@ -26,7 +26,7 @@ import openai
 from google import genai
 from google.genai import types as genai_types
 
-from glossary import MODELS
+from glossary import API_TIMEOUT_SECONDS, MODELS
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ def _call_anthropic(
     images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the Anthropic (Claude) API and return the text reply."""
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=API_TIMEOUT_SECONDS)
     images      = images      or []
     images_mime = images_mime or []
 
@@ -89,7 +89,7 @@ def _call_openai(
     images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the OpenAI API and return the text reply."""
-    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=API_TIMEOUT_SECONDS)
     images      = images      or []
     images_mime = images_mime or []
 
@@ -126,7 +126,10 @@ def _call_google(
     tuple[str, list[dict]]
         (answer_text, citations) — citations always empty (from search_engine.py).
     """
-    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    client = genai.Client(
+        api_key=os.environ["GOOGLE_API_KEY"],
+        http_options=genai_types.HttpOptions(timeout=API_TIMEOUT_SECONDS * 1000),
+    )
     images      = images      or []
     images_mime = images_mime or []
 
@@ -162,6 +165,7 @@ def _call_xai(
     client = openai.OpenAI(
         api_key=os.environ["XAI_API_KEY"],
         base_url="https://api.x.ai/v1",
+        timeout=API_TIMEOUT_SECONDS,
     )
     images      = images      or []
     images_mime = images_mime or []
