@@ -686,16 +686,24 @@ STAGE0_RESEARCH_BLOCK_FOOTER = "\n\n=== END LIVE RESEARCH DATA ===\n\n"
 # for any user question.  Kept here so it can be tuned from a single place.
 STAGE0_QUERY_PLAN_PROMPT = """\
 You are a search-query planner for a research assistant.
-Given the question below, output exactly 4 Google search queries in English \
-that would retrieve the most current, factual information needed to answer it.
+Decide whether the question below benefits from live web search results.
+
+If the question is purely theoretical, mathematical, definitional, or \
+historical (no current facts needed), output exactly:
+NO_SEARCH_NEEDED
+
+Otherwise, output 1–4 Google search queries in English (one per line) that \
+would retrieve the most current, factual information needed to answer it.
 
 Rules:
-- Output ONLY 4 queries, one per line — no numbers, no bullets, no explanation.
+- Output ONLY the queries (or NO_SEARCH_NEEDED) — no numbers, no bullets, \
+no explanation.
 - Write every query in English, even if the question is in Hebrew.
 - Prefer queries that return recent news or current data \
 (append the year when relevant).
-- Cover different angles: e.g. geopolitical status, market data, \
-expert analysis, latest developments.
+- Cover different angles: e.g. current status, market data, expert analysis, \
+latest developments.
+- Translate Hebrew questions to English before composing queries.
 
 Question: {question}
 """

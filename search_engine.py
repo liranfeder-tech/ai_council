@@ -344,7 +344,8 @@ def _plan_queries_with_ai(question: str) -> List[str]:
     on hardcoded keyword matching, we let a fast model determine what facts
     need to be looked up before the debate begins.
 
-    Returns up to 4 English queries, or [] if the model call fails.
+    Returns up to 4 English queries, or [] if the model call fails or decides
+    that no live search is needed (purely theoretical/definitional questions).
     Runs in ~1-2 s and degrades gracefully on any error.
     """
     if not search_is_available():
@@ -353,6 +354,8 @@ def _plan_queries_with_ai(question: str) -> List[str]:
         from ai_factory import call_model        # local import avoids circular dep at module load
         prompt = STAGE0_QUERY_PLAN_PROMPT.format(question=question[:500])
         raw = call_model("gemini", prompt, [], [])
+        if "NO_SEARCH_NEEDED" in raw.upper():
+            return []
         queries = [
             line.strip()
             for line in raw.strip().splitlines()
@@ -369,38 +372,44 @@ def get_live_market_data(question: str) -> Tuple[str, List[dict]]:
     context block plus structured citation dicts for the UI.
 
     Two complementary query sources are combined:
-      1. Keyword-based sub-queries (_build_broad_queries) — deterministic,
+      1. AI-planned queries (_plan_queries_with_ai) — Gemini Flash decides
+         whether live search is needed and generates targeted English queries
+         for ANY question (returns [] for purely theoretical questions).
+      2. Keyword-based sub-queries (_build_broad_queries) — deterministic,
          covers known domains (geopolitics, commodities, Israeli market …).
-      2. AI-planned queries (_plan_queries_with_ai) — Gemini Flash generates
-         4 targeted English queries for ANY question, making the search
-         truly topic-agnostic.
 
     All Serper.dev searches run in parallel via ThreadPoolExecutor.
     Silver/ILS targeted extraction is handled separately by get_live_context.
     """
-    q_lower = question.lower()
-    if not any(kw in q_lower for kw in _TRIGGER_KEYWORDS):
-        return "", []
     if not search_is_available():
         return "", []
 
-    # ── Build query list ───────────────────────────────────────────────────
-    # Run keyword-based planning and AI-based planning in parallel so the
-    # AI call doesn't add to the critical path of the keyword lookup.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-        kw_future = ex.submit(_build_broad_queries, question)
-        ai_future = ex.submit(_plan_queries_with_ai, question)
-        kw_queries = kw_future.result()
-        ai_queries = ai_future.result()
+    q_lower = question.lower()
 
-    # Merge: keyword queries first (deterministic, fast), then AI queries
-    # (deduplicated by lowercased text so near-duplicates are skipped).
-    seen_q: set = {q.lower() for q in kw_queries}
-    for q in ai_queries:
+    # ── Build query list ───────────────────────────────────────────────────
+    # AI planner and keyword planner run in parallel.
+    # AI planner is the primary gate: if it returns [] (NO_SEARCH_NEEDED),
+    # we still add keyword queries for known domains as a safety net.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        ai_future = ex.submit(_plan_queries_with_ai, question)
+        kw_future = ex.submit(_build_broad_queries, question)
+        ai_queries = ai_future.result()
+        kw_queries = kw_future.result()
+
+    # If AI says NO_SEARCH_NEEDED and no keyword matches → skip search.
+    # "No keyword matches" means _build_broad_queries returned only the raw
+    # question itself (which is always appended as queries[0]).
+    if not ai_queries and len(kw_queries) <= 1:
+        return "", []
+
+    # Merge: AI queries first (most targeted), then keyword queries.
+    seen_q: set = {q.lower() for q in ai_queries}
+    merged = list(ai_queries)
+    for q in kw_queries:
         if q.lower() not in seen_q:
-            kw_queries.append(q)
+            merged.append(q)
             seen_q.add(q.lower())
-    queries = kw_queries
+    queries = merged
 
     # ── Short image-based coin query expansion ─────────────────────────────
     _IMG_COIN_KW = ("coin", "מטבע", "שווי", "worth", "value", "ערך", "כסף",
