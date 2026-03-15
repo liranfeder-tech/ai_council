@@ -113,6 +113,12 @@ from glossary import (
     UI_TECH_LOG_TITLE,
     UI_UNVERIFIED_WARNING,
     UI_WARNING_MIN_MODELS,
+    UI_STAGE3B_LABEL,
+    UI_STAGE3B_POINT_HEADER,
+    UI_STAGE3B_ROUND1_LABEL,
+    UI_STAGE3B_ROUND2_LABEL,
+    UI_STAGE3B_EXPANDER_MODEL,
+    UI_STAGE3B_NO_DEBATES,
 )
 from logic_engine import run_council_debate
 from report_generator import generate_pdf
@@ -178,6 +184,7 @@ _STAGE_CFG = [
     {"icon": "⚙️", "label": "Thesis",        "color": "#7c3aed", "bg": "#ede9fe", "glow": "rgba(124,58,237,0.45)"},
     {"icon": "🔬", "label": "Audit",         "color": "#ea580c", "bg": "#ffedd5", "glow": "rgba(234,88,12,0.45)"},
     {"icon": "💬", "label": "Dialectic",     "color": "#059669", "bg": "#d1fae5", "glow": "rgba(5,150,105,0.45)"},
+    {"icon": "⚔️", "label": "Focused\nDebate", "color": "#dc2626", "bg": "#fee2e2", "glow": "rgba(220,38,38,0.45)"},
     {"icon": "🏛️", "label": "Synthesis",     "color": "#b45309", "bg": "#fef3c7", "glow": "rgba(180,83,9,0.45)"},
 ]
 
@@ -998,6 +1005,38 @@ def _display_results(results: dict) -> None:
                     else:
                         st.markdown(response_text if response_text else UI_NO_ANSWER)
 
+        # Stage 3b — Focused Debate
+        focused_debate = results.get("focused_debate", {})
+        if focused_debate and not focused_debate.get("skipped", True):
+            st.markdown("---")
+            st.markdown("### " + STAGE_LABELS["3b"])
+            points    = focused_debate.get("disagreement_points", [])
+            exchanges = focused_debate.get("exchanges", {})
+            if not points:
+                st.caption(UI_STAGE3B_NO_DEBATES)
+            else:
+                for point in points:
+                    pid     = point["point_id"]
+                    summary = point["summary"]
+                    m_keys  = point["model_keys"]
+                    st.markdown(UI_STAGE3B_POINT_HEADER.format(n=pid, summary=summary))
+                    st.caption(f"**Contested excerpt:** _{point['excerpt']}_")
+                    for rnd, round_label in [
+                        (1, UI_STAGE3B_ROUND1_LABEL),
+                        (2, UI_STAGE3B_ROUND2_LABEL),
+                    ]:
+                        st.markdown(f"**{round_label}**")
+                        for mk in m_keys:
+                            text  = exchanges.get((pid, rnd, mk), "")
+                            label = MODELS[mk]["label"]
+                            header = UI_STAGE3B_EXPANDER_MODEL.format(
+                                label=label, n=pid, r=rnd
+                            )
+                            with st.expander(header, expanded=(rnd == 1)):
+                                st.markdown(_model_badge(mk), unsafe_allow_html=True)
+                                st.write("")
+                                st.markdown(text or UI_NO_ANSWER)
+
 
 # ---------------------------------------------------------------------------
 # Debate execution — runs when the submit button is pressed OR when a
@@ -1157,20 +1196,33 @@ if start_button or _fup_question:
             except Exception:
                 pass
 
-        def stage4_cb(fraction: float, text: str) -> None:          # noqa: E306
+        def stage3b_cb(fraction: float, text: str) -> None:         # noqa: E306
             try:
                 if fraction >= 1.0:
                     _state["completed"].add(4)
                     _state["stage"] = -1
                 else:
                     _state["stage"] = 4
-                _state["log"].append(f"🏛️ Stage 4 — {text}")
+                _state["log"].append(f"⚔️ Stage 3b — {text}")
                 _refresh_ui()
-                status.update(label="🏛️ Stage 4 — running …")
+                status.update(label="⚔️ Stage 4 — Focused Debate running …")
             except Exception:
                 pass
 
-        # ── Run the full 4-stage DSAD debate ─────────────────────────────────
+        def stage4_cb(fraction: float, text: str) -> None:          # noqa: E306
+            try:
+                if fraction >= 1.0:
+                    _state["completed"].add(5)
+                    _state["stage"] = -1
+                else:
+                    _state["stage"] = 5
+                _state["log"].append(f"🏛️ Stage 5 — {text}")
+                _refresh_ui()
+                status.update(label="🏛️ Stage 5 — Synthesis running …")
+            except Exception:
+                pass
+
+        # ── Run the full DSAD debate ──────────────────────────────────────────
         _live_results = run_council_debate(
             active_keys=selected_keys,
             question=_active_question,
@@ -1181,11 +1233,12 @@ if start_button or _fup_question:
             stage1_cb=stage1_cb,
             stage2_cb=stage2_cb,
             stage3_cb=stage3_cb,
+            stage3b_cb=stage3b_cb,
             stage4_cb=stage4_cb,
         )
 
         # ── Final state: all circles complete ─────────────────────────────────
-        _state["completed"] = {0, 1, 2, 3, 4}
+        _state["completed"] = {0, 1, 2, 3, 4, 5}
         _state["stage"]     = -1
         _refresh_ui()
 

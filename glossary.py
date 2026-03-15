@@ -78,13 +78,15 @@ STAGE_LABELS = {
     1: "Stage 1 — Parallel Thesis",
     2: "Stage 2 — Adversarial Audit",
     3: "Stage 3 — Dialectic Response",
-    4: "Stage 4 — Consensus Synthesis",
+    "3b": "Stage 4 — Focused Debate",
+    4: "Stage 5 — Consensus Synthesis",
 }
 
 STAGE_DESCRIPTIONS = {
     1: "Each model generates an independent solution grounded in verified live data …",
     2: "Every model performs a rigorous flaw analysis of their peers' solutions …",
     3: "Models respond to critiques — defending correct positions or refining flawed ones …",
+    "3b": "Models that genuinely disagree engage in a short direct exchange — 2 rounds, one contested point at a time …",
     4: "The Mediator synthesises the full adversarial transcript into the Final Truth …",
 }
 
@@ -303,11 +305,86 @@ Do NOT mention individual model names in the final answer — present it as a \
 unified, authoritative response.
 """
 
+# ── Stage 3b — Disagreement Extraction ────────────────────────────────────
+# One LLM call: reads compressed critique+dialectic summaries, returns JSON.
+# Placeholders: {question}, {critiques_summary}, {dialectic_summary}, {available_keys}
+PROMPT_EXTRACT_DISAGREEMENTS = """\
+You are a debate analyst reviewing an AI council discussion.
+
+--- Original Question ---
+{question}
+
+--- Critique Summary (Stage 2) ---
+{critiques_summary}
+
+--- Dialectic Summary (Stage 3) ---
+{dialectic_summary}
+
+## Task
+Identify exactly 2-3 points where models GENUINELY disagree after Stage 3.
+Ignore stylistic differences. Focus only on factual or logical contradictions
+that were NOT resolved in Stage 3.
+
+For each point, output ONLY this exact JSON structure — nothing else:
+[
+  {{
+    "point_id": 1,
+    "summary": "One sentence describing what they disagree on.",
+    "model_keys": ["key1", "key2"],
+    "excerpt": "The specific contested claim or figure, quoted exactly (max 40 words)."
+  }}
+]
+
+Rules:
+- If fewer than 2 genuine disagreements exist, return an empty list: []
+- model_keys must be exact keys from this set: {available_keys}
+- Never invent disagreements. Only report what is explicit in the text above.
+- Return valid JSON only. No preamble, no explanation.
+"""
+
+# ── Stage 3b — Debate Round 1: Opening Position ───────────────────────────
+# Placeholders: {your_label}, {question}, {point_summary}, {excerpt}
+PROMPT_DEBATE_OPENING = """\
+You are {your_label}, participating in a focused one-point debate.
+
+--- The Question ---
+{question}
+
+--- Contested Point ---
+{point_summary}
+
+--- Specific Excerpt at Issue ---
+{excerpt}
+
+State your position on this specific point in 3-5 sentences.
+- Be precise. Reference the excerpt directly.
+- No preamble. No references to previous stages. Just your current position.
+- If you hold the same view as before, say so and explain why concisely.
+"""
+
+# ── Stage 3b — Debate Round 2: Direct Response ────────────────────────────
+# Placeholders: {your_label}, {point_summary}, {opponent_label}, {opponent_opening}
+PROMPT_DEBATE_RESPONSE = """\
+You are {your_label}, in the direct-response round of a focused debate.
+
+--- Contested Point ---
+{point_summary}
+
+--- {opponent_label}'s Position ---
+{opponent_opening}
+
+Respond directly to {opponent_label}'s position in 3-5 sentences.
+- Address their specific argument, not a strawman.
+- Either concede the point (with explicit acknowledgement) or rebut it with
+  clear reasoning.
+- No preamble. No stage references. Just your direct response.
+"""
+
 # Stage 4 — DSAD Consensus Synthesis
 # Mediator reviews the full adversarial transcript (Theses + Audits + Dialectic).
 # Placeholders: {vision_prefix}, {verified_context}, {question},
 #               {all_answers_block}, {all_critiques_block}, {all_dialectic_block},
-#               {silver_price}, {exchange_rate}
+#               {focused_debate_block}, {silver_price}, {exchange_rate}
 COUNCIL_CONSENSUS_PROMPT = """\
 {vision_prefix}{verified_context}You are the impartial Mediator of the AI Council. \
 You are NOT one of the debating agents.  You have observed the complete \
@@ -325,6 +402,9 @@ verified truth from it.
 
 --- Stage 3: Dialectic Responses (Defense & Refinement) ---
 {all_dialectic_block}
+
+--- Stage 4: Focused Debate Exchanges ---
+{focused_debate_block}
 
 ## Consensus Protocol
 
@@ -371,7 +451,10 @@ Show every arithmetic step explicitly (weight → troy-oz → USD → ILS → \
 ## Output Format
 
 1. **Consensus Points** — What all models agreed on after the dialectic.
-2. **Contested Points** — Where genuine disagreement remained and why.
+2. **Contested Points** — Where genuine disagreement remained and why. \
+- Where disagreement was **resolved** in the Focused Debate, state: \
+"✅ Resolved in Focused Debate: [topic]."
+- Where disagreement **persists**, state: "⚠️ Unresolved: [topic] — [brief reason]."
 3. **Final Certified Answer** — Synthesised truth using only verified data.
 4. **Verification Status** — List every Tier 1 citation with its URL. If none, \
 write: "⚠️ No real-time grounding data was available. All numeric claims omitted."
@@ -749,6 +832,15 @@ EDUCATIONAL_FRAMING_NOTE = (
     "conversation constitutes financial, investment, or legal advice.  Treat this "
     "as a scholarly analysis task, not a financial consultation."
 )
+# ── Stage 3b UI strings ───────────────────────────────────────────────────
+UI_STAGE3B_LABEL          = "Stage 4 — Focused Debate"
+UI_STAGE3B_POINT_HEADER   = "### 🔥 Point {n}: {summary}"
+UI_STAGE3B_ROUND1_LABEL   = "Round 1 — Opening Positions"
+UI_STAGE3B_ROUND2_LABEL   = "Round 2 — Direct Responses"
+UI_STAGE3B_EXPANDER_MODEL = "⚔️ {label} — Point {n}, Round {r}"
+UI_STAGE3B_NO_DEBATES     = "_No significant disagreements detected — models converged after Stage 3._"
+UI_SPINNER_STAGE3B        = "⚔️ Stage 4 — Focused Debate running …"
+
 UI_SECTION_CITATIONS  = "📚 Verified Sources & References"
 UI_CITATIONS_NO_DATA  = ("ℹ️ Note: This response was generated based on model knowledge "
                          "and logical synthesis. No real-time grounding data was retrieved.")

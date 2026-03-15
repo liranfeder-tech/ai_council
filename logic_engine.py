@@ -24,9 +24,10 @@ Design notes
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import re
 from datetime import datetime
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, TypedDict
 
 from glossary import (
     CONTEXTUAL_HALLUCINATION_TRIGGERS,
@@ -39,6 +40,9 @@ from glossary import (
     PROMPT_CRITIQUE,
     PROMPT_DIALECTIC,
     PROMPT_INITIAL,
+    PROMPT_EXTRACT_DISAGREEMENTS,
+    PROMPT_DEBATE_OPENING,
+    PROMPT_DEBATE_RESPONSE,
     FOLLOWUP_CONTEXT_BLOCK,
     STAGE0_LIVE_LABEL,
     STAGE0_MARKET_INSTRUCTION,
@@ -48,6 +52,8 @@ from glossary import (
     UI_STAGE0_COMPLETE_GENERAL,
     UI_STAGE0_COMPLETE_NONE,
     UI_STAGE0_SEARCHING,
+    UI_STAGE3B_NO_DEBATES,
+    UI_SPINNER_STAGE3B,
     VISION_MODE_PROMPT,
 )
 from ai_factory import call_model, call_model_with_citations
@@ -58,6 +64,13 @@ from search_engine import get_live_context, get_live_market_data, search_is_avai
 # Type aliases
 # ---------------------------------------------------------------------------
 ProgressCallback = Callable[[float, str], None]   # (fraction 0-1, status text)
+
+
+class DisagreementPoint(TypedDict):
+    point_id:   int
+    summary:    str
+    model_keys: list[str]
+    excerpt:    str
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +377,207 @@ def run_stage3_dialectic(
 
 
 # ---------------------------------------------------------------------------
+# Stage 3b — Focused Debate
+# ---------------------------------------------------------------------------
+
+def _build_critiques_summary(critiques: dict[tuple[str, str], str]) -> str:
+    """Truncate each critique to first 150 chars for the extraction prompt."""
+    lines: List[str] = []
+    for (reviewer_key, target_key), text in critiques.items():
+        reviewer_label = MODELS[reviewer_key]["label"]
+        target_label   = MODELS[target_key]["label"]
+        snippet = text[:150].replace("\n", " ")
+        lines.append(f"{reviewer_label} → {target_label}: {snippet}…")
+    return "\n".join(lines) if lines else "_No critiques._"
+
+
+def _build_dialectic_summary(dialectic: dict[str, str]) -> str:
+    """Truncate each dialectic response to first 150 chars."""
+    lines: List[str] = []
+    for key, text in dialectic.items():
+        label   = MODELS[key]["label"]
+        snippet = text[:150].replace("\n", " ")
+        lines.append(f"{label}: {snippet}…")
+    return "\n".join(lines) if lines else "_No dialectic responses._"
+
+
+def _extract_disagreement_points(
+    question: str,
+    active_keys: List[str],
+    critiques: dict[tuple[str, str], str],
+    dialectic: dict[str, str],
+) -> list[DisagreementPoint]:
+    """
+    Ask the master model to identify 2-3 genuine disagreement points.
+    Returns [] on any error or when models have converged.
+    """
+    prompt = PROMPT_EXTRACT_DISAGREEMENTS.format(
+        question=question,
+        critiques_summary=_build_critiques_summary(critiques),
+        dialectic_summary=_build_dialectic_summary(dialectic),
+        available_keys=str(active_keys),
+    )
+    raw = call_model(MASTER_MODEL_KEY, prompt)
+    if raw.startswith("ERROR:"):
+        return []
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        points = json.loads(cleaned)
+        if not isinstance(points, list):
+            return []
+        valid: list[DisagreementPoint] = []
+        for p in points:
+            p["model_keys"] = [k for k in p.get("model_keys", []) if k in active_keys]
+            if len(p["model_keys"]) >= 2:
+                valid.append(p)
+        return valid[:3]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return []
+
+
+def _run_one_debate_round(
+    point: DisagreementPoint,
+    round_num: int,
+    model_key: str,
+    question: str,
+    opponent_opening: str = "",
+    opponent_key: str = "",
+) -> tuple[int, int, str, str]:
+    """Execute one debate turn. Returns (point_id, round_num, model_key, text)."""
+    your_label = MODELS[model_key]["label"]
+    if round_num == 1:
+        prompt = PROMPT_DEBATE_OPENING.format(
+            your_label=your_label,
+            question=question,
+            point_summary=point["summary"],
+            excerpt=point["excerpt"],
+        )
+    else:
+        opponent_label = MODELS[opponent_key]["label"] if opponent_key else "opponent"
+        prompt = PROMPT_DEBATE_RESPONSE.format(
+            your_label=your_label,
+            point_summary=point["summary"],
+            opponent_label=opponent_label,
+            opponent_opening=opponent_opening,
+        )
+    text = call_model(model_key, prompt)
+    return point["point_id"], round_num, model_key, text
+
+
+def run_stage3b_focused_debate(
+    active_keys: List[str],
+    question: str,
+    critiques: dict[tuple[str, str], str],
+    dialectic: dict[str, str],
+    progress_cb: Optional[ProgressCallback] = None,
+) -> dict:
+    """
+    Identify genuine disagreements after Stage 3 and run focused 2-round exchanges.
+
+    Returns
+    -------
+    dict with keys:
+        disagreement_points : list[DisagreementPoint]
+        exchanges           : dict[(point_id, round, model_key), text]
+        skipped             : bool
+    """
+    empty = {"disagreement_points": [], "exchanges": {}, "skipped": True}
+
+    if len(active_keys) < 2:
+        return empty
+
+    if progress_cb:
+        progress_cb(0.0, "🔍 Extracting disagreement points …")
+
+    points = _extract_disagreement_points(question, active_keys, critiques, dialectic)
+
+    if not points:
+        if progress_cb:
+            progress_cb(1.0, UI_STAGE3B_NO_DEBATES)
+        return empty
+
+    exchanges: dict[tuple[int, int, str], str] = {}
+    total_rounds = sum(len(p["model_keys"]) * 2 for p in points)
+    completed    = 0
+
+    for point in points:
+        m_keys = point["model_keys"]
+        pid    = point["point_id"]
+
+        # Round 1 — opening positions (parallel)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
+            r1_futures = {
+                ex.submit(_run_one_debate_round, point, 1, mk, question): mk
+                for mk in m_keys
+            }
+            for fut in concurrent.futures.as_completed(r1_futures):
+                p_id, rnd, mk, text = fut.result()
+                exchanges[(p_id, rnd, mk)] = text
+                completed += 1
+                if progress_cb:
+                    label = MODELS[mk]["label"]
+                    progress_cb(completed / total_rounds,
+                                f"⚔️ {label} — Point {pid} Round 1 done")
+
+        # Round 2 — direct responses (needs Round 1, parallel across models)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
+            r2_futures = {}
+            for mk in m_keys:
+                opponent_key     = next((k for k in m_keys if k != mk), "")
+                opponent_opening = exchanges.get((pid, 1, opponent_key), "")
+                fut = ex.submit(
+                    _run_one_debate_round, point, 2, mk, question,
+                    opponent_opening, opponent_key,
+                )
+                r2_futures[fut] = mk
+            for fut in concurrent.futures.as_completed(r2_futures):
+                p_id, rnd, mk, text = fut.result()
+                exchanges[(p_id, rnd, mk)] = text
+                completed += 1
+                if progress_cb:
+                    label = MODELS[mk]["label"]
+                    progress_cb(completed / total_rounds,
+                                f"⚔️ {label} — Point {pid} Round 2 done")
+
+    if progress_cb:
+        progress_cb(1.0, f"✅ Focused debate complete — {len(points)} point(s) debated")
+
+    return {
+        "disagreement_points": points,
+        "exchanges":           exchanges,
+        "skipped":             False,
+    }
+
+
+def _format_focused_debate(focused_debate: Optional[dict]) -> str:
+    """Render focused debate exchanges into a readable block for the consensus prompt."""
+    if not focused_debate or focused_debate.get("skipped", True):
+        return "_No focused debate was conducted — models converged after Stage 3._"
+    points    = focused_debate.get("disagreement_points", [])
+    exchanges = focused_debate.get("exchanges", {})
+    if not points:
+        return "_No significant disagreements detected._"
+    blocks: List[str] = []
+    for point in points:
+        pid     = point["point_id"]
+        summary = point["summary"]
+        m_keys  = point["model_keys"]
+        lines   = [f"### Point {pid}: {summary}"]
+        for rnd, rnd_label in [(1, "Opening"), (2, "Response")]:
+            for mk in m_keys:
+                text  = exchanges.get((pid, rnd, mk), "")
+                label = MODELS[mk]["label"]
+                if text:
+                    lines.append(f"**{label} — {rnd_label}:**\n{text}")
+        blocks.append("\n\n".join(lines))
+    return "\n\n---\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
 # Stage 4 — Consensus Synthesis (DSAD)
 # ---------------------------------------------------------------------------
 
@@ -377,6 +591,7 @@ def run_stage4_consensus(
     images_mime: Optional[List[str]] = None,
     silver_price: str = "N/A",
     exchange_rate: str = "N/A",
+    focused_debate: Optional[dict] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> tuple[str, bool]:
     """
@@ -410,6 +625,7 @@ def run_stage4_consensus(
         all_answers_block=_format_all_answers(answers),
         all_critiques_block=_format_all_critiques(critiques),
         all_dialectic_block=_format_all_dialectic(dialectic),
+        focused_debate_block=_format_focused_debate(focused_debate),
         silver_price=silver_price,
         exchange_rate=exchange_rate,
     )
@@ -452,6 +668,7 @@ def run_council_debate(
     stage1_cb: Optional[ProgressCallback] = None,
     stage2_cb: Optional[ProgressCallback] = None,
     stage3_cb: Optional[ProgressCallback] = None,
+    stage3b_cb: Optional[ProgressCallback] = None,
     stage4_cb: Optional[ProgressCallback] = None,
 ) -> dict:
     """
@@ -632,12 +849,24 @@ def run_council_debate(
             100 - retraction_hits * 20 - hallucination_hits * 40 - hard_hits * 50,
         )
 
+    # ── Stage 3b: Focused Debate ───────────────────────────────────────────
+    # Only the non-master models debate — master stays as mediator
+    debate_keys = [k for k in all_keys if k != MASTER_MODEL_KEY]
+    focused_debate = run_stage3b_focused_debate(
+        active_keys=debate_keys,
+        question=question,
+        critiques=critiques,
+        dialectic=dialectic,
+        progress_cb=stage3b_cb,
+    )
+
     # ── Stage 4: Consensus Synthesis ──────────────────────────────────────
     final_answer, fallback_used = run_stage4_consensus(
         question, answers, critiques, dialectic, verified_context,
         images, images_mime,
         silver_price=silver_price,
         exchange_rate=exchange_rate,
+        focused_debate=focused_debate,
         progress_cb=stage4_cb,
     )
 
@@ -654,6 +883,7 @@ def run_council_debate(
         "answers":            answers,
         "critiques":          critiques,
         "dialectic":          dialectic,
+        "focused_debate":     focused_debate,
         "reliability_scores": reliability_scores,
         "final_answer":       final_answer,
         "fallback_used":      fallback_used,
