@@ -30,6 +30,11 @@ FALLBACK_MODEL_ID  = "gemini-3-pro-preview"   # human-readable reference / loggi
 #   id          – the exact model string the provider API expects
 #   label       – human-readable name shown in the UI
 #   provider    – which client class the factory should use
+#                 Supported providers and their required env vars:
+#                   "anthropic" → ANTHROPIC_API_KEY
+#                   "openai"    → OPENAI_API_KEY
+#                   "google"    → GOOGLE_API_KEY
+#                   "xai"       → XAI_API_KEY
 #   color       – hex colour for the card / expander accent
 # ---------------------------------------------------------------------------
 MODELS: dict[str, dict] = {
