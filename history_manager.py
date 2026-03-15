@@ -73,9 +73,9 @@ def _serialize_results(results: dict) -> dict:
     Convert a results dict to a JSON-safe form.
 
     Handles:
-    - critiques: {(reviewer, target): text}  →  {"reviewer|target": text}
-    - All other fields (dialectic, reliability_scores, pdf_cache_path, …)
-      are passed through as-is — they are already JSON-serialisable.
+    - critiques:  {(reviewer, target): text}          → {"reviewer|target": text}
+    - focused_debate.exchanges: {(pid, rnd, mk): text} → {"pid|rnd|mk": text}
+    - All other fields are passed through as-is.
     """
     out = dict(results)
     # critiques: {(reviewer, target): text}  →  {"reviewer|target": text}
@@ -84,6 +84,15 @@ def _serialize_results(results: dict) -> dict:
             f"{k[0]}|{k[1]}": v
             for k, v in out["critiques"].items()
         }
+    # focused_debate.exchanges: {(pid, rnd, mk): text}  →  {"pid|rnd|mk": text}
+    if "focused_debate" in out and out["focused_debate"]:
+        fd = dict(out["focused_debate"])
+        if fd.get("exchanges"):
+            fd["exchanges"] = {
+                f"{k[0]}|{k[1]}|{k[2]}": v
+                for k, v in fd["exchanges"].items()
+            }
+        out["focused_debate"] = fd
     return out
 
 
@@ -96,6 +105,16 @@ def _deserialize_results(data: dict) -> dict:
             tuple(k.split("|", 1)): v
             for k, v in out["critiques"].items()
         }
+    # "pid|rnd|mk"  →  (int(pid), int(rnd), mk)
+    if "focused_debate" in out and out["focused_debate"]:
+        fd = dict(out["focused_debate"])
+        if fd.get("exchanges"):
+            fd["exchanges"] = {
+                (int(parts[0]), int(parts[1]), parts[2]): v
+                for k, v in fd["exchanges"].items()
+                for parts in [k.split("|", 2)]
+            }
+        out["focused_debate"] = fd
     return out
 
 
