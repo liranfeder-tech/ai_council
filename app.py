@@ -176,6 +176,7 @@ from history_manager import (
 )
 from auth_manager import (
     get_email_verified,
+    refresh_session,
     send_verification_email,
     sign_in,
     sign_up,
@@ -365,6 +366,8 @@ if "user_api_keys" not in st.session_state:
     st.session_state.user_api_keys = {}    # provider → api_key string (BYOK)
 if "_ls_loaded" not in st.session_state:
     st.session_state._ls_loaded = False    # True once localStorage has been read
+if "_user_loaded" not in st.session_state:
+    st.session_state._user_loaded = False  # True once auth localStorage has been read
 
 # ---------------------------------------------------------------------------
 # localStorage bridge — load saved API keys into session on first render
@@ -384,6 +387,33 @@ if not st.session_state._ls_loaded:
             except (json.JSONDecodeError, TypeError):
                 pass
         st.session_state._ls_loaded = True
+
+# ---------------------------------------------------------------------------
+# Auth persistence — restore login session from localStorage on page refresh
+# ---------------------------------------------------------------------------
+# Only runs when the user is not already logged in and we haven't read yet.
+if not st.session_state.user and not st.session_state._user_loaded:
+    _auth_raw = st_javascript("localStorage.getItem('ai_council_user') ?? ''")
+    if isinstance(_auth_raw, str):          # real response (not initial 0)
+        if len(_auth_raw) > 2:
+            try:
+                _stored = json.loads(_auth_raw)
+                _rtok   = _stored.get("refresh_token", "")
+                if _rtok:
+                    _refreshed = refresh_session(_rtok)
+                    if isinstance(_refreshed, dict):
+                        st.session_state.user = _refreshed
+                        # Update localStorage with the new id_token
+                        _new_json = json.dumps(_refreshed)
+                        st_javascript(
+                            f"localStorage.setItem('ai_council_user', {json.dumps(_new_json)})"
+                        )
+                    else:
+                        # Refresh failed (account disabled / token revoked) — clear storage
+                        st_javascript("localStorage.removeItem('ai_council_user')")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        st.session_state._user_loaded = True
 
 
 # ---------------------------------------------------------------------------
@@ -519,9 +549,11 @@ with st.sidebar:
         # Logged-in state
         st.success(f"✅ {UI_AUTH_LOGGED_IN_AS}: **{_user['email']}**")
         if st.button(UI_AUTH_LOGOUT_BTN, use_container_width=True):
-            st.session_state.user = None
+            st.session_state.user         = None
             st.session_state.current_results = None
             st.session_state.from_history    = False
+            st.session_state._user_loaded    = True   # don't re-read stale storage
+            st_javascript("localStorage.removeItem('ai_council_user')")
             st.rerun()
     else:
         # Login / Sign-up form
@@ -549,7 +581,13 @@ with st.sidebar:
                         else sign_up(_email.strip(), _password.strip())
                     )
                 if isinstance(result, dict):
-                    st.session_state.user = result
+                    st.session_state.user         = result
+                    st.session_state._user_loaded = True
+                    # Persist session in localStorage so refresh doesn't log out
+                    _user_json = json.dumps(result)
+                    st_javascript(
+                        f"localStorage.setItem('ai_council_user', {json.dumps(_user_json)})"
+                    )
                     success_msg = (
                         UI_AUTH_SUCCESS_LOGIN
                         if _auth_mode == UI_AUTH_LOGIN_TAB

@@ -32,6 +32,7 @@ _SIGN_IN_URL        = "https://identitytoolkit.googleapis.com/v1/accounts:signIn
 _SIGN_UP_URL        = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
 _SEND_OOB_URL       = "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode"
 _LOOKUP_URL         = "https://identitytoolkit.googleapis.com/v1/accounts:lookup"
+_TOKEN_REFRESH_URL  = "https://securetoken.googleapis.com/v1/token"
 
 # Map Firebase error codes → user-friendly messages
 _FIREBASE_ERRORS: dict[str, str] = {
@@ -78,6 +79,7 @@ def _post(url: str, payload: dict) -> Union[UserInfo, str]:
                 "uid":            data["localId"],
                 "email":          data["email"],
                 "id_token":       data["idToken"],
+                "refresh_token":  data.get("refreshToken", ""),
                 "email_verified": data.get("emailVerified", False),
             }
         return _parse_error(resp)
@@ -88,6 +90,51 @@ def _post(url: str, payload: dict) -> Union[UserInfo, str]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def refresh_session(refresh_token: str) -> Union[UserInfo, str]:
+    """
+    Exchange a Firebase refresh_token for a fresh id_token.
+
+    Called on page reload to restore the session without asking the user
+    to log in again.  Firebase refresh tokens do not expire unless the
+    user's account is disabled or the token is explicitly revoked.
+
+    Returns a user dict on success or an error string on failure.
+    """
+    key = _api_key()
+    if not key or not refresh_token:
+        return "Missing API key or refresh token."
+    try:
+        resp = requests.post(
+            f"{_TOKEN_REFRESH_URL}?key={key}",
+            json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            timeout=10,
+        )
+        if resp.ok:
+            data = resp.json()
+            new_id_token      = data.get("id_token") or data.get("access_token", "")
+            new_refresh_token = data.get("refresh_token", refresh_token)
+            uid               = data.get("user_id", "")
+            # Fetch email + email_verified via /accounts:lookup
+            lookup_resp = requests.post(
+                f"{_LOOKUP_URL}?key={key}",
+                json={"idToken": new_id_token},
+                timeout=10,
+            )
+            if lookup_resp.ok:
+                users = lookup_resp.json().get("users", [{}])
+                user  = users[0] if users else {}
+                return {
+                    "uid":            uid or user.get("localId", ""),
+                    "email":          user.get("email", ""),
+                    "id_token":       new_id_token,
+                    "refresh_token":  new_refresh_token,
+                    "email_verified": bool(user.get("emailVerified", False)),
+                }
+        return _parse_error(resp)
+    except requests.RequestException as exc:
+        return f"Network error: {exc}"
+
 
 def sign_in(email: str, password: str) -> Union[UserInfo, str]:
     """
