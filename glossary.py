@@ -896,6 +896,66 @@ HEBREW_MONTHS = [
     "", "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
     "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
 ]
+# ---------------------------------------------------------------------------
+# Code Review / Project Analysis Mode
+# ---------------------------------------------------------------------------
+
+# File extensions included in a project scan by default.
+CODE_REVIEW_EXTENSIONS: set = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs",
+    ".c", ".cpp", ".h", ".cs", ".rb", ".php", ".swift", ".kt",
+    ".html", ".css", ".scss", ".json", ".yaml", ".yml", ".toml",
+    ".md", ".sql", ".sh", ".bash", ".tf",
+}
+
+# Directories always skipped during a project scan.
+CODE_REVIEW_SKIP_DIRS: set = {
+    ".git", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+    "env", "dist", "build", ".idea", ".vscode", "coverage",
+    ".pytest_cache", ".mypy_cache", ".tox", "pdf_cache",
+}
+
+CODE_REVIEW_MAX_FILE_SIZE   = 50_000    # bytes — files larger than this are skipped
+CODE_REVIEW_MAX_TOTAL_CHARS = 120_000   # total characters across all files
+CODE_REVIEW_MAX_FILES       = 60        # maximum number of files per scan
+
+# Injected at the top of verified_context when project files are loaded.
+# {folder_name}, {file_count}, {total_chars} are substituted at runtime.
+CODE_REVIEW_CONTEXT_HEADER = """\
+╔══════════════════════════════════════════════════════════════════╗
+║               PROJECT CODE CONTEXT — {folder_name}              ║
+║  Files included: {file_count}  |  Size: ~{total_chars:,} chars  ║
+╠══════════════════════════════════════════════════════════════════╣
+║  INSTRUCTION: The source files below are VERIFIED GROUND TRUTH.  ║
+║  Base all findings strictly on what is present in these files.   ║
+║  Do NOT speculate about code that is not shown.                  ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+# Default question auto-filled when the user activates Code Review mode
+# without typing a custom question.
+CODE_REVIEW_DEFAULT_QUESTION = (
+    "Please perform a thorough code review of this project. "
+    "Identify: (1) bugs and logic errors, (2) security vulnerabilities, "
+    "(3) code quality and maintainability issues, "
+    "(4) architectural patterns and improvement opportunities. "
+    "For each finding state its severity (Critical / High / Medium / Low) "
+    "and suggest a concrete fix."
+)
+
+# UI strings for the Code Review panel
+UI_CODE_REVIEW_TOGGLE       = "📁 ניתוח קוד מפרויקט מקומי"
+UI_CODE_REVIEW_PATH_LABEL   = "נתיב לתיקיית הפרויקט"
+UI_CODE_REVIEW_PATH_PLACEHOLDER = "/path/to/your/project"
+UI_CODE_REVIEW_SCAN_BTN     = "🔍 סרוק פרויקט"
+UI_CODE_REVIEW_SCANNING     = "⏳ סורק קבצי פרויקט…"
+UI_CODE_REVIEW_SCANNED      = "✅ {count} קבצים נטענו מ-**{name}** (~{chars:,} תווים)"
+UI_CODE_REVIEW_WARNINGS     = "⚠️ {count} קבצים הושמטו (גודל / סוג)"
+UI_CODE_REVIEW_EMPTY        = "⚠️ לא נמצאו קבצי קוד בתיקייה שנבחרה."
+UI_CODE_REVIEW_NOT_FOUND    = "❌ תיקייה לא נמצאה: {path}"
+UI_CODE_REVIEW_FILES_HEADER = "📄 קבצים שנטענו"
+UI_CODE_REVIEW_CLEAR_BTN    = "🗑️ נקה"
+
 UPLOAD_IMAGE_LABEL    = "📷 Upload visual assets for analysis (optional — up to 4 images)"
 IMAGE_PREVIEW_HEADER  = "📷 Visual Assets"
 RTL_CSS               = """

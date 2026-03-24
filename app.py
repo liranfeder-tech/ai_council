@@ -119,8 +119,21 @@ from glossary import (
     UI_STAGE3B_ROUND2_LABEL,
     UI_STAGE3B_EXPANDER_MODEL,
     UI_STAGE3B_NO_DEBATES,
+    CODE_REVIEW_DEFAULT_QUESTION,
+    UI_CODE_REVIEW_TOGGLE,
+    UI_CODE_REVIEW_PATH_LABEL,
+    UI_CODE_REVIEW_PATH_PLACEHOLDER,
+    UI_CODE_REVIEW_SCAN_BTN,
+    UI_CODE_REVIEW_SCANNING,
+    UI_CODE_REVIEW_SCANNED,
+    UI_CODE_REVIEW_WARNINGS,
+    UI_CODE_REVIEW_EMPTY,
+    UI_CODE_REVIEW_NOT_FOUND,
+    UI_CODE_REVIEW_FILES_HEADER,
+    UI_CODE_REVIEW_CLEAR_BTN,
 )
 from logic_engine import run_council_debate
+from project_reader import scan_project
 from report_generator import generate_pdf
 from history_manager import (
     check_usage_limit,
@@ -655,7 +668,79 @@ if uploaded_files:
         if len(uploaded_files) > 4:
             st.caption(f"_Showing first 4 of {len(uploaded_files)} images._")
 
-_can_submit = (bool(question.strip()) or bool(images_bytes)) and not _quota_reached
+# ---------------------------------------------------------------------------
+# Code Review panel — scan a local project folder
+# ---------------------------------------------------------------------------
+
+# Initialise session keys on first load
+if "code_review_context" not in st.session_state:
+    st.session_state.code_review_context  = ""   # formatted context block
+if "code_review_files" not in st.session_state:
+    st.session_state.code_review_files    = []   # list of relative file paths
+if "code_review_warnings" not in st.session_state:
+    st.session_state.code_review_warnings = []
+
+with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_review_context)):
+    _cr_col_path, _cr_col_btn, _cr_col_clear = st.columns([5, 1, 1])
+
+    with _cr_col_path:
+        _cr_path = st.text_input(
+            UI_CODE_REVIEW_PATH_LABEL,
+            placeholder=UI_CODE_REVIEW_PATH_PLACEHOLDER,
+            key="code_review_path_input",
+            label_visibility="collapsed",
+        )
+
+    with _cr_col_btn:
+        _cr_scan = st.button(UI_CODE_REVIEW_SCAN_BTN, use_container_width=True)
+
+    with _cr_col_clear:
+        if st.button(UI_CODE_REVIEW_CLEAR_BTN, use_container_width=True,
+                     disabled=not st.session_state.code_review_context):
+            st.session_state.code_review_context  = ""
+            st.session_state.code_review_files    = []
+            st.session_state.code_review_warnings = []
+            st.rerun()
+
+    if _cr_scan and _cr_path:
+        with st.spinner(UI_CODE_REVIEW_SCANNING):
+            _cr_block, _cr_files, _cr_warns = scan_project(_cr_path.strip())
+        if _cr_block:
+            st.session_state.code_review_context  = _cr_block
+            st.session_state.code_review_files    = _cr_files
+            st.session_state.code_review_warnings = _cr_warns
+            st.rerun()
+        else:
+            # scan returned nothing — display the reason
+            _cr_err = _cr_warns[0] if _cr_warns else UI_CODE_REVIEW_EMPTY
+            st.error(_cr_err)
+
+    if st.session_state.code_review_context:
+        _cr_name  = st.session_state.code_review_files[0].split("/")[0] if st.session_state.code_review_files else _cr_path
+        _cr_chars = len(st.session_state.code_review_context)
+        st.success(UI_CODE_REVIEW_SCANNED.format(
+            count=len(st.session_state.code_review_files),
+            name=_cr_name,
+            chars=_cr_chars,
+        ))
+
+        if st.session_state.code_review_warnings:
+            st.caption(UI_CODE_REVIEW_WARNINGS.format(
+                count=len(st.session_state.code_review_warnings)
+            ))
+
+        with st.expander(UI_CODE_REVIEW_FILES_HEADER, expanded=False):
+            for _f in st.session_state.code_review_files:
+                st.caption(f"• {_f}")
+
+# If a project is loaded and no custom question was typed, auto-fill the default
+_effective_question = question.strip()
+if st.session_state.code_review_context and not _effective_question:
+    _effective_question = CODE_REVIEW_DEFAULT_QUESTION
+
+_can_submit = (
+    bool(_effective_question) or bool(images_bytes) or bool(st.session_state.code_review_context)
+) and not _quota_reached
 
 if st.session_state.current_results is not None:
     _col_submit, _col_clear = st.columns([3, 1])
@@ -1049,13 +1134,14 @@ _fup_ctx      = st.session_state.pop("_followup_ctx", None)
 
 if start_button or _fup_question:
     # Resolve the effective question and context for this run
-    _active_question   = _fup_question or question
+    _active_question   = _fup_question or _effective_question
     _previous_ctx      = _fup_ctx      # None for regular questions
     _active_images     = [] if _fup_question else images_bytes
     _active_images_mime = [] if _fup_question else images_mime
+    _active_code_ctx   = "" if _fup_question else st.session_state.code_review_context
 
-    if not _active_question.strip() and not _active_images:
-        st.warning("Please provide a question or upload at least one image.")
+    if not _active_question.strip() and not _active_images and not _active_code_ctx:
+        st.warning("Please provide a question, upload an image, or scan a project folder.")
         st.stop()
 
     all_active_keys = list(dict.fromkeys([MASTER_MODEL_KEY] + selected_keys))
@@ -1229,6 +1315,7 @@ if start_button or _fup_question:
             images=_active_images,
             images_mime=_active_images_mime,
             previous_context=_previous_ctx,
+            code_context=_active_code_ctx,
             stage0_cb=stage0_cb,
             stage1_cb=stage1_cb,
             stage2_cb=stage2_cb,

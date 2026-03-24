@@ -662,6 +662,7 @@ def run_council_debate(
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
     previous_context: Optional[dict] = None,
+    code_context: str = "",
     stage0_cb: Optional[ProgressCallback] = None,
     stage1_cb: Optional[ProgressCallback] = None,
     stage2_cb: Optional[ProgressCallback] = None,
@@ -682,6 +683,10 @@ def run_council_debate(
         Raw image bytes.  When provided all stages use Vision Expert Mode.
     image_mime : str
         MIME type of the uploaded image (default "image/jpeg").
+    code_context : str, optional
+        Pre-formatted code context block from project_reader.scan_project().
+        When provided it is injected as the very first item in verified_context
+        so every model reads the source files before answering.
     stage1_cb … stage4_cb : callable, optional
         Per-stage progress callbacks: (fraction: float, status: str) -> None.
 
@@ -773,6 +778,10 @@ def run_council_debate(
         )
     if broad_block:
         context_parts.append(broad_block)
+
+    # ── Code Review: inject project files as the primary verified source
+    if code_context:
+        context_parts.insert(0, code_context)
 
     # ── Follow-up: prepend prior-debate context so every model reads it first
     if previous_context:
