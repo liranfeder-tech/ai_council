@@ -1009,44 +1009,70 @@ UI_CODE_REVIEW_CLEAR_BTN    = "🗑️ נקה"
 PROVIDER_KEY_CONFIG: dict = {
     "anthropic": {
         "env":         "ANTHROPIC_API_KEY",
-        "label":       "Anthropic — Claude",
+        "label":       "Claude (Anthropic)",
+        "description": "רוצה להשתמש בחשבון Claude האישי שלך? "
+                       "הדבק כאן את הקוד שקיבלת מ-Anthropic.",
         "placeholder": "sk-ant-api03-…",
         "url":         "https://console.anthropic.com/settings/keys",
     },
     "openai": {
         "env":         "OPENAI_API_KEY",
-        "label":       "OpenAI — GPT-4o",
+        "label":       "GPT-4o (OpenAI)",
+        "description": "רוצה להשתמש בחשבון ChatGPT/OpenAI האישי שלך? "
+                       "הדבק כאן את המפתח שלך.",
         "placeholder": "sk-proj-…",
         "url":         "https://platform.openai.com/api-keys",
     },
     "google": {
         "env":         "GOOGLE_API_KEY",
-        "label":       "Google — Gemini",
+        "label":       "Gemini (Google)",
+        "description": "רוצה להשתמש בחשבון Google AI האישי שלך? "
+                       "הדבק כאן את המפתח מ-Google AI Studio.",
         "placeholder": "AIzaSy…",
         "url":         "https://aistudio.google.com/apikey",
     },
     "xai": {
         "env":         "XAI_API_KEY",
-        "label":       "xAI — Grok",
+        "label":       "Grok (xAI)",
+        "description": "רוצה להשתמש בחשבון xAI/Grok האישי שלך? "
+                       "הדבק כאן את המפתח מקונסולת xAI.",
         "placeholder": "xai-…",
         "url":         "https://console.x.ai/",
     },
+}
+
+# Status indicators shown next to each provider in the dialog
+APIKEY_STATUS_ICON = {
+    "valid":   "🟢",
+    "quota":   "🟠",
+    "invalid": "🔴",
+    "none":    "⚪",
+}
+APIKEY_STATUS_LABEL = {
+    "valid":   "מחובר",
+    "quota":   "מכסה מלאה",
+    "invalid": "מפתח שגוי",
+    "none":    "Fallback (מפתח האפליקציה)",
 }
 
 # UI strings for the key management dialog / sidebar
 UI_APIKEY_BTN_SIDEBAR      = "🔑 מפתחות API"
 UI_APIKEY_DIALOG_TITLE     = "הגדרת מפתחות API"
 UI_APIKEY_DIALOG_SUBTITLE  = (
-    "הכנס את המפתחות שלך כדי להשתמש בחשבון ה-API האישי שלך. "
-    "המפתחות נשמרים בזיכרון הסשן בלבד ונמחקים עם סגירת הדפדפן."
+    "השתמש במפתחות ה-API האישיים שלך כדי לשלוט בעלויות "
+    "ולהסיר את מגבלת השאילתות היומית. "
+    "המפתחות נשמרים בדפדפן שלך בלבד — לא בשרת ולא במסד הנתונים."
 )
 UI_APIKEY_FIELD_LABEL      = "מפתח API"
-UI_APIKEY_SAVE_BTN         = "💾 שמור מפתחות"
+UI_APIKEY_VALIDATE_SAVE    = "🔍 אמת ושמור"
+UI_APIKEY_VALIDATING       = "בודק מפתחות…"
 UI_APIKEY_CLEAR_BTN        = "🗑️ נקה הכל"
-UI_APIKEY_SAVED_OK         = "✅ מפתחות נשמרו — השאילתות הבאות ישתמשו בחשבונך"
-UI_APIKEY_CLEARED          = "🗑️ מפתחות נוקו — חוזר למפתחות ברירת מחדל"
-UI_APIKEY_ACTIVE_BADGE     = "🔑 BYOK פעיל"
+UI_APIKEY_SAVED_OK         = "✅ מפתחות נשמרו בדפדפן — שאילתות ישתמשו בחשבונך"
+UI_APIKEY_PARTIAL_SAVED    = "⚠️ חלק מהמפתחות נשמרו — ראה שגיאות למטה"
+UI_APIKEY_CLEARED          = "🗑️ מפתחות נוקו — האפליקציה חוזרת ל-Fallback"
+UI_APIKEY_ACTIVE_BADGE     = "BYOK"
 UI_APIKEY_GET_KEY_LINK     = "קבל מפתח ←"
+UI_APIKEY_UNCHANGED_SKIP   = "_(לא השתנה — נשמר כפי שהוא)_"
 
 UPLOAD_IMAGE_LABEL    = "📷 Upload visual assets for analysis (optional — up to 4 images)"
 IMAGE_PREVIEW_HEADER  = "📷 Visual Assets"

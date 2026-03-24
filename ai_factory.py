@@ -230,6 +230,80 @@ def _call_xai(
 # Public interface
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# API key validation — lightweight test call per provider
+# ---------------------------------------------------------------------------
+
+def validate_api_key(provider: str, api_key: str) -> tuple[bool, str]:
+    """
+    Make a minimal test call to verify an API key is authentic.
+
+    Returns
+    -------
+    tuple[bool, str]
+        (is_valid, message)
+        is_valid=True even for quota/rate-limit errors — the KEY is valid,
+        the user just ran out of credits.  Callers should save the key but
+        display the quota warning.
+    """
+    try:
+        if provider == "anthropic":
+            c = anthropic.Anthropic(api_key=api_key, timeout=10)
+            c.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        elif provider == "openai":
+            c = openai.OpenAI(api_key=api_key, timeout=10)
+            c.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        elif provider == "google":
+            c = genai.Client(
+                api_key=api_key,
+                http_options=genai_types.HttpOptions(timeout=10_000),
+            )
+            c.models.generate_content(
+                model="gemini-1.5-flash",
+                contents="hi",
+                config=genai_types.GenerateContentConfig(max_output_tokens=1),
+            )
+
+        elif provider == "xai":
+            c = openai.OpenAI(
+                api_key=api_key,
+                base_url="https://api.x.ai/v1",
+                timeout=10,
+            )
+            c.chat.completions.create(
+                model="grok-3",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        else:
+            return False, f"ספק לא מוכר: {provider}"
+
+        return True, ""
+
+    except Exception as exc:
+        s = str(exc).lower()
+        if any(w in s for w in ("401", "invalid api key", "invalid x-api-key",
+                                "authentication", "unauthorized", "incorrect api key")):
+            return False, "מפתח לא תקין — בדוק שהועתק במלואו"
+        if any(w in s for w in ("403", "permission", "forbidden", "access denied")):
+            return False, "אין הרשאה — בדוק שלמפתח יש גישה ל-API"
+        if any(w in s for w in ("429", "rate limit", "quota", "exceeded", "billing")):
+            # Key is real — user just ran out of credits
+            return True, "מכסת ה-API הסתיימה — המפתח תקין אך המכסה מוצתה"
+        return False, f"שגיאה: {type(exc).__name__}: {exc}"
+
+
 def call_model_with_citations(
     model_key: str,
     prompt: str,

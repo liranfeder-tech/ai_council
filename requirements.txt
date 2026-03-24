@@ -23,5 +23,8 @@ pypdf>=4.0.0
 openpyxl>=3.1.0
 python-docx>=1.1.0
 
+# ── Browser localStorage bridge ───────────────────────────────────────────
+streamlit-javascript>=0.0.3
+
 # ── Cloud Sync (Firestore) ────────────────────────────────────────────────
 firebase-admin>=6.2.0
