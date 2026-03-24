@@ -22,6 +22,7 @@ Design notes
 """
 
 import concurrent.futures
+import contextvars
 import json
 import re
 from datetime import datetime
@@ -139,10 +140,11 @@ def run_stage1_parallel_inference(
     citations: List[dict]     = []
     total = len(active_keys)
 
+    _ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=total) as executor:
         futures = {
             executor.submit(
-                _fetch_one_answer, key, question, verified_context,
+                _ctx.run, _fetch_one_answer, key, question, verified_context,
                 images, images_mime
             ): key
             for key in active_keys
@@ -231,10 +233,11 @@ def run_stage2_cross_critique(
     critiques: dict[tuple[str, str], str] = {}
     total = len(pairs)
 
+    _ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(total, 8)) as executor:
         futures = {
             executor.submit(
-                _critique_one, reviewer, target, question, answers,
+                _ctx.run, _critique_one, reviewer, target, question, answers,
                 verified_context, images, images_mime
             ): (reviewer, target)
             for reviewer, target in pairs
@@ -353,10 +356,11 @@ def run_stage3_dialectic(
     dialectic: dict[str, str] = {}
     total = len(responding)
 
+    _ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=total) as executor:
         futures = {
             executor.submit(
-                _dialectic_one,
+                _ctx.run, _dialectic_one,
                 key, question, answers.get(key, ""),
                 critiques_by_target[key],
                 verified_context, images, images_mime,
@@ -507,9 +511,10 @@ def run_stage3b_focused_debate(
         pid    = point["point_id"]
 
         # Round 1 — opening positions (parallel)
+        _ctx = contextvars.copy_context()
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
             r1_futures = {
-                ex.submit(_run_one_debate_round, point, 1, mk, question): mk
+                ex.submit(_ctx.run, _run_one_debate_round, point, 1, mk, question): mk
                 for mk in m_keys
             }
             for fut in concurrent.futures.as_completed(r1_futures):
@@ -522,13 +527,14 @@ def run_stage3b_focused_debate(
                                 f"⚔️ {label} — Point {pid} Round 1 done")
 
         # Round 2 — direct responses (needs Round 1, parallel across models)
+        _ctx2 = contextvars.copy_context()
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
             r2_futures = {}
             for mk in m_keys:
                 opponent_key     = next((k for k in m_keys if k != mk), "")
                 opponent_opening = exchanges.get((pid, 1, opponent_key), "")
                 fut = ex.submit(
-                    _run_one_debate_round, point, 2, mk, question,
+                    _ctx2.run, _run_one_debate_round, point, 2, mk, question,
                     opponent_opening, opponent_key,
                 )
                 r2_futures[fut] = mk

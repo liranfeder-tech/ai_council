@@ -19,6 +19,7 @@ is identical to the text-only path.
 
 import base64
 import os
+from contextvars import ContextVar
 from typing import List, Optional
 
 import anthropic
@@ -27,6 +28,42 @@ from google import genai
 from google.genai import types as genai_types
 
 from glossary import API_TIMEOUT_SECONDS, MODELS
+
+# ---------------------------------------------------------------------------
+# Per-session API key override
+# ---------------------------------------------------------------------------
+# Stores user-supplied API keys scoped to the current execution context
+# (thread-safe via ContextVar — each Streamlit session runs in its own thread,
+# and copy_context() in logic_engine propagates this to child threads).
+#
+# Keys map provider name → key string, e.g.:
+#   {"anthropic": "sk-ant-...", "openai": "sk-...", "google": "AIza...", "xai": "xai-..."}
+#
+_SESSION_KEYS: ContextVar[dict] = ContextVar("session_api_keys", default={})
+
+
+def set_session_api_keys(keys: dict) -> None:
+    """
+    Set user-supplied API keys for the current session context.
+    Call this once before run_council_debate(); the keys are inherited
+    automatically by all child threads via copy_context().
+
+    Parameters
+    ----------
+    keys : dict
+        Mapping of provider name to API key string.
+        Accepted keys: "anthropic", "openai", "google", "xai".
+        Empty string or missing entry → falls back to os.environ.
+    """
+    _SESSION_KEYS.set({k: v for k, v in keys.items() if v and v.strip()})
+
+
+def _key(env_var: str, provider: str) -> str:
+    """Return the API key: session override first, then os.environ."""
+    session = _SESSION_KEYS.get()
+    if provider in session:
+        return session[provider]
+    return os.environ[env_var]
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +92,7 @@ def _call_anthropic(
     images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the Anthropic (Claude) API and return the text reply."""
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=API_TIMEOUT_SECONDS)
+    client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "anthropic"), timeout=API_TIMEOUT_SECONDS)
     images      = images      or []
     images_mime = images_mime or []
 
@@ -89,7 +126,7 @@ def _call_openai(
     images_mime: Optional[List[str]] = None,
 ) -> str:
     """Call the OpenAI API and return the text reply."""
-    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=API_TIMEOUT_SECONDS)
+    client = openai.OpenAI(api_key=_key("OPENAI_API_KEY", "openai"), timeout=API_TIMEOUT_SECONDS)
     images      = images      or []
     images_mime = images_mime or []
 
@@ -127,7 +164,7 @@ def _call_google(
         (answer_text, citations) — citations always empty (from search_engine.py).
     """
     client = genai.Client(
-        api_key=os.environ["GOOGLE_API_KEY"],
+        api_key=_key("GOOGLE_API_KEY", "google"),
         http_options=genai_types.HttpOptions(timeout=API_TIMEOUT_SECONDS * 1000),
     )
     images      = images      or []
@@ -163,7 +200,7 @@ def _call_xai(
 ) -> str:
     """Call the xAI (Grok) API using the OpenAI-compatible client."""
     client = openai.OpenAI(
-        api_key=os.environ["XAI_API_KEY"],
+        api_key=_key("XAI_API_KEY", "xai"),
         base_url="https://api.x.ai/v1",
         timeout=API_TIMEOUT_SECONDS,
     )

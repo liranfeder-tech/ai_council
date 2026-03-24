@@ -1001,6 +1001,53 @@ UI_CODE_REVIEW_NOT_FOUND    = "❌ תיקייה לא נמצאה: {path}"
 UI_CODE_REVIEW_FILES_HEADER = "📄 קבצים שנטענו"
 UI_CODE_REVIEW_CLEAR_BTN    = "🗑️ נקה"
 
+# ---------------------------------------------------------------------------
+# API Key Management Dialog
+# ---------------------------------------------------------------------------
+
+# Maps provider key (same as in MODELS) → (env var name, display label, placeholder hint)
+PROVIDER_KEY_CONFIG: dict = {
+    "anthropic": {
+        "env":         "ANTHROPIC_API_KEY",
+        "label":       "Anthropic — Claude",
+        "placeholder": "sk-ant-api03-…",
+        "url":         "https://console.anthropic.com/settings/keys",
+    },
+    "openai": {
+        "env":         "OPENAI_API_KEY",
+        "label":       "OpenAI — GPT-4o",
+        "placeholder": "sk-proj-…",
+        "url":         "https://platform.openai.com/api-keys",
+    },
+    "google": {
+        "env":         "GOOGLE_API_KEY",
+        "label":       "Google — Gemini",
+        "placeholder": "AIzaSy…",
+        "url":         "https://aistudio.google.com/apikey",
+    },
+    "xai": {
+        "env":         "XAI_API_KEY",
+        "label":       "xAI — Grok",
+        "placeholder": "xai-…",
+        "url":         "https://console.x.ai/",
+    },
+}
+
+# UI strings for the key management dialog / sidebar
+UI_APIKEY_BTN_SIDEBAR      = "🔑 מפתחות API"
+UI_APIKEY_DIALOG_TITLE     = "הגדרת מפתחות API"
+UI_APIKEY_DIALOG_SUBTITLE  = (
+    "הכנס את המפתחות שלך כדי להשתמש בחשבון ה-API האישי שלך. "
+    "המפתחות נשמרים בזיכרון הסשן בלבד ונמחקים עם סגירת הדפדפן."
+)
+UI_APIKEY_FIELD_LABEL      = "מפתח API"
+UI_APIKEY_SAVE_BTN         = "💾 שמור מפתחות"
+UI_APIKEY_CLEAR_BTN        = "🗑️ נקה הכל"
+UI_APIKEY_SAVED_OK         = "✅ מפתחות נשמרו — השאילתות הבאות ישתמשו בחשבונך"
+UI_APIKEY_CLEARED          = "🗑️ מפתחות נוקו — חוזר למפתחות ברירת מחדל"
+UI_APIKEY_ACTIVE_BADGE     = "🔑 BYOK פעיל"
+UI_APIKEY_GET_KEY_LINK     = "קבל מפתח ←"
+
 UPLOAD_IMAGE_LABEL    = "📷 Upload visual assets for analysis (optional — up to 4 images)"
 IMAGE_PREVIEW_HEADER  = "📷 Visual Assets"
 RTL_CSS               = """

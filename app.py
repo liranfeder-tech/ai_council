@@ -140,10 +140,22 @@ from glossary import (
     UI_FILE_UPLOAD_CLEAR_BTN,
     UI_FILE_UPLOAD_EMPTY,
     UI_FILE_UPLOAD_FILES_HDR,
+    PROVIDER_KEY_CONFIG,
+    UI_APIKEY_BTN_SIDEBAR,
+    UI_APIKEY_DIALOG_TITLE,
+    UI_APIKEY_DIALOG_SUBTITLE,
+    UI_APIKEY_FIELD_LABEL,
+    UI_APIKEY_SAVE_BTN,
+    UI_APIKEY_CLEAR_BTN,
+    UI_APIKEY_SAVED_OK,
+    UI_APIKEY_CLEARED,
+    UI_APIKEY_ACTIVE_BADGE,
+    UI_APIKEY_GET_KEY_LINK,
 )
 from logic_engine import run_council_debate
 from project_reader import scan_project
 from file_reader import build_file_context
+from ai_factory import set_session_api_keys
 from report_generator import generate_pdf
 from history_manager import (
     check_usage_limit,
@@ -341,6 +353,54 @@ if "_force_rerun" not in st.session_state:
     st.session_state._force_rerun = False  # True = skip cache check this run
 if "_cached_usage" not in st.session_state:
     st.session_state._cached_usage = None  # (uid, count) — avoids Firestore call on every keystroke
+if "user_api_keys" not in st.session_state:
+    st.session_state.user_api_keys = {}    # provider → api_key string (BYOK)
+
+
+# ---------------------------------------------------------------------------
+# API Key Management Dialog  (@st.dialog — requires Streamlit ≥ 1.36)
+# ---------------------------------------------------------------------------
+
+@st.dialog(UI_APIKEY_DIALOG_TITLE, width="large")
+def _api_key_dialog() -> None:
+    """Modal dialog for entering/replacing API keys (BYOK)."""
+    st.caption(UI_APIKEY_DIALOG_SUBTITLE)
+    st.divider()
+
+    draft: dict = {}
+    for provider, cfg in PROVIDER_KEY_CONFIG.items():
+        current = st.session_state.user_api_keys.get(provider, "")
+        col_lbl, col_link = st.columns([4, 1])
+        with col_lbl:
+            st.markdown(f"**{cfg['label']}**")
+        with col_link:
+            st.markdown(
+                f"[{UI_APIKEY_GET_KEY_LINK}]({cfg['url']})",
+                unsafe_allow_html=False,
+            )
+        val = st.text_input(
+            UI_APIKEY_FIELD_LABEL,
+            value=current,
+            placeholder=cfg["placeholder"],
+            type="password",
+            key=f"_apikey_input_{provider}",
+            label_visibility="collapsed",
+        )
+        draft[provider] = val.strip()
+        st.write("")   # spacing
+
+    st.divider()
+    col_save, col_clear = st.columns([3, 1])
+    with col_save:
+        if st.button(UI_APIKEY_SAVE_BTN, type="primary", use_container_width=True):
+            st.session_state.user_api_keys = {k: v for k, v in draft.items() if v}
+            st.success(UI_APIKEY_SAVED_OK)
+            st.rerun()
+    with col_clear:
+        if st.button(UI_APIKEY_CLEAR_BTN, use_container_width=True):
+            st.session_state.user_api_keys = {}
+            st.info(UI_APIKEY_CLEARED)
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -425,15 +485,16 @@ with st.sidebar:
             selected_keys.append(key)
 
     st.divider()
-    st.caption(
-        "API keys are read from environment variables:\n"
-        "- `ANTHROPIC_API_KEY`\n"
-        "- `OPENAI_API_KEY`\n"
-        "- `GOOGLE_API_KEY`\n"
-        "- `XAI_API_KEY`\n"
-        "- `SERPER_API_KEY` _(optional — enables pre-flight live search)_\n"
-        "- `FIREBASE_WEB_API_KEY` _(required for user authentication)_"
-    )
+
+    # ── BYOK — API key management ─────────────────────────────────────────────
+    _byok_active = bool(st.session_state.user_api_keys)
+    _key_col, _badge_col = st.columns([3, 1])
+    with _key_col:
+        if st.button(UI_APIKEY_BTN_SIDEBAR, use_container_width=True):
+            _api_key_dialog()
+    with _badge_col:
+        if _byok_active:
+            st.success(UI_APIKEY_ACTIVE_BADGE, icon="🔑")
 
     # ── Cloud Sync status indicator ───────────────────────────────────────────
     if firestore_status():
@@ -1381,6 +1442,9 @@ if start_button or _fup_question:
                 status.update(label="🏛️ Stage 5 — Synthesis running …")
             except Exception:
                 pass
+
+        # ── Apply user-supplied API keys (BYOK) for this session ─────────────
+        set_session_api_keys(st.session_state.user_api_keys)
 
         # ── Run the full DSAD debate ──────────────────────────────────────────
         _live_results = run_council_debate(
