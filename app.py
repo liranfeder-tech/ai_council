@@ -417,113 +417,111 @@ if not st.session_state.user and not st.session_state._user_loaded:
 
 
 # ---------------------------------------------------------------------------
-# API Key Management Dialog  (@st.dialog — requires Streamlit ≥ 1.36)
+# API Key Management — inline helper (called inside sidebar expander)
 # ---------------------------------------------------------------------------
 
-@st.dialog(UI_APIKEY_DIALOG_TITLE, width="large")
-def _api_key_dialog() -> None:
+def _render_api_key_expander() -> None:
     """
-    Modal dialog for entering, validating, and saving API keys (BYOK).
+    Renders the BYOK API key management UI inside a sidebar st.expander.
     Keys are persisted in browser localStorage — never in the server DB.
     """
-    st.caption(UI_APIKEY_DIALOG_SUBTITLE)
-    st.divider()
+    _byok_active = bool(st.session_state.user_api_keys)
+    _expander_label = f"🔑 API Keys {'✅' if _byok_active else ''}"
+    with st.expander(_expander_label, expanded=False):
+        st.caption("🔒 Your keys are stored locally in your browser and used only as a proxy. They are never saved to our database.")
+        st.caption(UI_APIKEY_DIALOG_SUBTITLE)
+        st.divider()
 
-    draft: dict = {}
-    for provider, cfg in PROVIDER_KEY_CONFIG.items():
-        current = st.session_state.user_api_keys.get(provider, "")
-        status  = st.session_state.get(f"_key_status_{provider}", "none" if not current else "valid")
+        draft: dict = {}
+        for provider, cfg in PROVIDER_KEY_CONFIG.items():
+            current = st.session_state.user_api_keys.get(provider, "")
+            status  = st.session_state.get(f"_key_status_{provider}", "none" if not current else "valid")
 
-        # ── Header row: status dot + label + link ─────────────────────────
-        icon       = APIKEY_STATUS_ICON[status]
-        status_lbl = APIKEY_STATUS_LABEL[status]
-        col_hdr, col_link = st.columns([5, 1])
-        with col_hdr:
-            st.markdown(f"{icon} **{cfg['label']}** &nbsp; <small style='color:grey'>{status_lbl}</small>",
-                        unsafe_allow_html=True)
-        with col_link:
-            st.link_button(UI_APIKEY_GET_KEY_LINK, cfg["url"], use_container_width=True)
+            # ── Header row: status dot + label + link ─────────────────────────
+            icon       = APIKEY_STATUS_ICON[status]
+            status_lbl = APIKEY_STATUS_LABEL[status]
+            col_hdr, col_link = st.columns([5, 1])
+            with col_hdr:
+                st.markdown(f"{icon} **{cfg['label']}** &nbsp; <small style='color:grey'>{status_lbl}</small>",
+                            unsafe_allow_html=True)
+            with col_link:
+                st.link_button(UI_APIKEY_GET_KEY_LINK, cfg["url"], use_container_width=True)
 
-        # ── User-friendly description ──────────────────────────────────────
-        st.caption(cfg["description"])
+            # ── Key input ─────────────────────────────────────────────────────
+            val = st.text_input(
+                UI_APIKEY_FIELD_LABEL,
+                value=current,
+                placeholder=cfg["placeholder"],
+                type="password",
+                key=f"_apikey_input_{provider}",
+                label_visibility="collapsed",
+            )
+            draft[provider] = val.strip()
+            st.write("")   # breathing room between providers
 
-        # ── Key input ─────────────────────────────────────────────────────
-        val = st.text_input(
-            UI_APIKEY_FIELD_LABEL,
-            value=current,
-            placeholder=cfg["placeholder"],
-            type="password",
-            key=f"_apikey_input_{provider}",
-            label_visibility="collapsed",
-        )
-        draft[provider] = val.strip()
-        st.write("")   # breathing room between providers
+        st.divider()
+        col_save, col_clear = st.columns([3, 1])
 
-    st.divider()
-    col_save, col_clear = st.columns([3, 1])
+        with col_save:
+            if st.button(UI_APIKEY_VALIDATE_SAVE, type="primary", use_container_width=True):
+                # Separate unchanged keys from new/modified ones
+                unchanged = {p: k for p, k in draft.items()
+                             if k and k == st.session_state.user_api_keys.get(p)}
+                to_validate = {p: k for p, k in draft.items()
+                               if k and k != st.session_state.user_api_keys.get(p)}
 
-    with col_save:
-        if st.button(UI_APIKEY_VALIDATE_SAVE, type="primary", use_container_width=True):
-            # Separate unchanged keys from new/modified ones
-            unchanged = {p: k for p, k in draft.items()
-                         if k and k == st.session_state.user_api_keys.get(p)}
-            to_validate = {p: k for p, k in draft.items()
-                           if k and k != st.session_state.user_api_keys.get(p)}
+                errors: list[str] = []
+                new_keys: dict    = dict(unchanged)   # start with already-valid keys
 
-            errors: list[str] = []
-            new_keys: dict    = dict(unchanged)   # start with already-valid keys
+                if to_validate:
+                    with st.spinner(UI_APIKEY_VALIDATING):
+                        with ThreadPoolExecutor(max_workers=len(to_validate)) as ex:
+                            futs = {ex.submit(validate_api_key, p, k): p
+                                    for p, k in to_validate.items()}
+                            for fut in as_completed(futs):
+                                p = futs[fut]
+                                ok, msg = fut.result()
+                                if ok:
+                                    new_keys[p] = to_validate[p]
+                                    st.session_state[f"_key_status_{p}"] = (
+                                        "quota" if msg else "valid"
+                                    )
+                                    if msg:
+                                        errors.append(f"🟠 **{PROVIDER_KEY_CONFIG[p]['label']}:** {msg}")
+                                else:
+                                    st.session_state[f"_key_status_{p}"] = "invalid"
+                                    errors.append(f"🔴 **{PROVIDER_KEY_CONFIG[p]['label']}:** {msg}")
 
-            if to_validate:
-                with st.spinner(UI_APIKEY_VALIDATING):
-                    with ThreadPoolExecutor(max_workers=len(to_validate)) as ex:
-                        futs = {ex.submit(validate_api_key, p, k): p
-                                for p, k in to_validate.items()}
-                        for fut in as_completed(futs):
-                            p = futs[fut]
-                            ok, msg = fut.result()
-                            if ok:
-                                new_keys[p] = to_validate[p]
-                                # quota warning = key is valid but rate-limited
-                                st.session_state[f"_key_status_{p}"] = (
-                                    "quota" if msg else "valid"
-                                )
-                                if msg:
-                                    errors.append(f"🟠 **{PROVIDER_KEY_CONFIG[p]['label']}:** {msg}")
-                            else:
-                                st.session_state[f"_key_status_{p}"] = "invalid"
-                                errors.append(f"🔴 **{PROVIDER_KEY_CONFIG[p]['label']}:** {msg}")
+                # Clear status for providers whose field was emptied
+                for p in PROVIDER_KEY_CONFIG:
+                    if not draft.get(p):
+                        st.session_state.pop(f"_key_status_{p}", None)
 
-            # Clear status for providers whose field was emptied
-            for p in PROVIDER_KEY_CONFIG:
-                if not draft.get(p):
+                # Persist valid keys
+                st.session_state.user_api_keys = new_keys
+                set_session_api_keys(new_keys)
+                _ls_json = json.dumps(new_keys)
+                st_javascript(f"localStorage.setItem('ai_council_keys', {json.dumps(_ls_json)})")
+                st.session_state._ls_loaded = True
+
+                if errors:
+                    for e in errors:
+                        st.markdown(e)
+                    st.warning(UI_APIKEY_PARTIAL_SAVED if new_keys else "No valid keys were saved.")
+                else:
+                    st.success(UI_APIKEY_SAVED_OK)
+
+                st.rerun()
+
+        with col_clear:
+            if st.button(UI_APIKEY_CLEAR_BTN, use_container_width=True):
+                st.session_state.user_api_keys = {}
+                set_session_api_keys({})
+                st_javascript("localStorage.removeItem('ai_council_keys')")
+                for p in PROVIDER_KEY_CONFIG:
                     st.session_state.pop(f"_key_status_{p}", None)
-
-            # Persist valid keys
-            st.session_state.user_api_keys = new_keys
-            set_session_api_keys(new_keys)
-            # Save to localStorage (survives page refresh)
-            _ls_json = json.dumps(new_keys)
-            st_javascript(f"localStorage.setItem('ai_council_keys', {json.dumps(_ls_json)})")
-            st.session_state._ls_loaded = True   # prevent re-read overwriting new state
-
-            if errors:
-                for e in errors:
-                    st.markdown(e)
-                st.warning(UI_APIKEY_PARTIAL_SAVED if new_keys else "לא נשמרו מפתחות תקינים.")
-            else:
-                st.success(UI_APIKEY_SAVED_OK)
-
-            st.rerun()
-
-    with col_clear:
-        if st.button(UI_APIKEY_CLEAR_BTN, use_container_width=True):
-            st.session_state.user_api_keys = {}
-            set_session_api_keys({})
-            st_javascript("localStorage.removeItem('ai_council_keys')")
-            for p in PROVIDER_KEY_CONFIG:
-                st.session_state.pop(f"_key_status_{p}", None)
-            st.info(UI_APIKEY_CLEARED)
-            st.rerun()
+                st.info(UI_APIKEY_CLEARED)
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -618,14 +616,7 @@ with st.sidebar:
     st.divider()
 
     # ── BYOK — API key management ─────────────────────────────────────────────
-    _byok_active = bool(st.session_state.user_api_keys)
-    _key_col, _badge_col = st.columns([3, 1])
-    with _key_col:
-        if st.button(UI_APIKEY_BTN_SIDEBAR, use_container_width=True):
-            _api_key_dialog()
-    with _badge_col:
-        if _byok_active:
-            st.success(UI_APIKEY_ACTIVE_BADGE, icon="🔑")
+    _render_api_key_expander()
 
     # ── Cloud Sync status indicator ───────────────────────────────────────────
     if firestore_status():
