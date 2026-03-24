@@ -897,6 +897,51 @@ HEBREW_MONTHS = [
     "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
 ]
 # ---------------------------------------------------------------------------
+# Data File Upload — Analysis Mode
+# ---------------------------------------------------------------------------
+
+# Streamlit type filter (extensions without the dot)
+FILE_UPLOAD_ACCEPTED_TYPES = [
+    "csv", "tsv", "txt", "md", "json", "jsonl",
+    "pdf", "xlsx", "xls", "docx", "log",
+]
+
+FILE_UPLOAD_MAX_SIZE_MB    = 15       # MB — per-file size shown in the UI hint
+FILE_UPLOAD_MAX_FILES      = 6        # max files per upload batch
+FILE_UPLOAD_MAX_ROWS_CSV   = 300      # rows shown for CSV / Excel preview
+FILE_UPLOAD_MAX_TOTAL_CHARS = 150_000 # chars across all files combined
+
+# Injected at the top of the file context block.
+# {file_count} and {total_chars} are substituted at runtime.
+FILE_UPLOAD_CONTEXT_HEADER = """\
+╔══════════════════════════════════════════════════════════════════╗
+║               UPLOADED DATA FILES — ANALYSIS CONTEXT            ║
+║  Files: {file_count}  |  Size: ~{total_chars:,} chars           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  INSTRUCTION: The file contents below are VERIFIED INPUT DATA.  ║
+║  Base all findings and analysis strictly on this data.          ║
+║  Do NOT invent rows, metrics, or values not present here.       ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+# Default analysis question when files are uploaded without a custom question
+FILE_UPLOAD_DEFAULT_QUESTION = (
+    "Please perform a thorough analysis of the uploaded data. "
+    "Identify: (1) key trends and patterns, (2) anomalies or outliers, "
+    "(3) actionable insights and recommendations, "
+    "(4) data quality issues if any. "
+    "Present your findings clearly with specific references to the data."
+)
+
+# UI labels
+UI_FILE_UPLOAD_LABEL       = "📎 העלה קבצי נתונים לניתוח (CSV, Excel, PDF, JSON, TXT ועוד)"
+UI_FILE_UPLOAD_LOADED      = "✅ {count} קבצים נטענו (~{chars:,} תווים)"
+UI_FILE_UPLOAD_WARNINGS    = "⚠️ {count} הערות טעינה"
+UI_FILE_UPLOAD_CLEAR_BTN   = "🗑️ נקה קבצים"
+UI_FILE_UPLOAD_EMPTY       = "⚠️ לא ניתן לחלץ תוכן מהקבצים שהועלו."
+UI_FILE_UPLOAD_FILES_HDR   = "📄 קבצים שנטענו"
+
+# ---------------------------------------------------------------------------
 # Code Review / Project Analysis Mode
 # ---------------------------------------------------------------------------
 

@@ -131,9 +131,19 @@ from glossary import (
     UI_CODE_REVIEW_NOT_FOUND,
     UI_CODE_REVIEW_FILES_HEADER,
     UI_CODE_REVIEW_CLEAR_BTN,
+    FILE_UPLOAD_ACCEPTED_TYPES,
+    FILE_UPLOAD_DEFAULT_QUESTION,
+    FILE_UPLOAD_MAX_SIZE_MB,
+    UI_FILE_UPLOAD_LABEL,
+    UI_FILE_UPLOAD_LOADED,
+    UI_FILE_UPLOAD_WARNINGS,
+    UI_FILE_UPLOAD_CLEAR_BTN,
+    UI_FILE_UPLOAD_EMPTY,
+    UI_FILE_UPLOAD_FILES_HDR,
 )
 from logic_engine import run_council_debate
 from project_reader import scan_project
+from file_reader import build_file_context
 from report_generator import generate_pdf
 from history_manager import (
     check_usage_limit,
@@ -669,6 +679,61 @@ if uploaded_files:
             st.caption(f"_Showing first 4 of {len(uploaded_files)} images._")
 
 # ---------------------------------------------------------------------------
+# Data file upload — CSV / Excel / PDF / JSON / TXT / DOCX
+# ---------------------------------------------------------------------------
+
+_dkey = f"data_upload_{st.session_state._query_counter}"
+
+data_uploaded_files = st.file_uploader(
+    UI_FILE_UPLOAD_LABEL,
+    type=FILE_UPLOAD_ACCEPTED_TYPES,
+    accept_multiple_files=True,
+    key=_dkey,
+    help=f"עד {FILE_UPLOAD_MAX_SIZE_MB} MB לקובץ. התוכן יוזרק לכל המודלים כהקשר מאומת.",
+)
+
+# Process uploaded data files into a context block
+if "data_file_context" not in st.session_state:
+    st.session_state.data_file_context    = ""
+    st.session_state.data_file_names      = []
+    st.session_state.data_file_warnings   = []
+
+if data_uploaded_files:
+    _pairs = [(f.name, f.getvalue()) for f in data_uploaded_files]
+    _df_block, _df_warns = build_file_context(_pairs)
+    st.session_state.data_file_context  = _df_block
+    st.session_state.data_file_names    = [f.name for f in data_uploaded_files]
+    st.session_state.data_file_warnings = _df_warns
+
+    if _df_block:
+        _col_info, _col_clr = st.columns([5, 1])
+        with _col_info:
+            st.success(UI_FILE_UPLOAD_LOADED.format(
+                count=len(data_uploaded_files),
+                chars=len(_df_block),
+            ))
+        with _col_clr:
+            if st.button(UI_FILE_UPLOAD_CLEAR_BTN, key="data_file_clear"):
+                st.session_state.data_file_context  = ""
+                st.session_state.data_file_names    = []
+                st.session_state.data_file_warnings = []
+                st.rerun()
+
+        if _df_warns:
+            st.caption(UI_FILE_UPLOAD_WARNINGS.format(count=len(_df_warns)))
+            with st.expander(UI_FILE_UPLOAD_FILES_HDR, expanded=False):
+                for w in _df_warns:
+                    st.caption(f"⚠️ {w}")
+    else:
+        st.warning(UI_FILE_UPLOAD_EMPTY)
+
+elif not data_uploaded_files and st.session_state.data_file_context:
+    # User removed files from the uploader — clear the context
+    st.session_state.data_file_context  = ""
+    st.session_state.data_file_names    = []
+    st.session_state.data_file_warnings = []
+
+# ---------------------------------------------------------------------------
 # Code Review panel — scan a local project folder
 # ---------------------------------------------------------------------------
 
@@ -733,13 +798,22 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
             for _f in st.session_state.code_review_files:
                 st.caption(f"• {_f}")
 
-# If a project is loaded and no custom question was typed, auto-fill the default
+# Merge all extra contexts into one block (data files + code review)
+_combined_extra_context = "\n\n".join(filter(None, [
+    st.session_state.data_file_context,
+    st.session_state.code_review_context,
+]))
+
+# Auto-fill a default question when context is loaded but no question typed
 _effective_question = question.strip()
-if st.session_state.code_review_context and not _effective_question:
-    _effective_question = CODE_REVIEW_DEFAULT_QUESTION
+if not _effective_question:
+    if st.session_state.data_file_context:
+        _effective_question = FILE_UPLOAD_DEFAULT_QUESTION
+    elif st.session_state.code_review_context:
+        _effective_question = CODE_REVIEW_DEFAULT_QUESTION
 
 _can_submit = (
-    bool(_effective_question) or bool(images_bytes) or bool(st.session_state.code_review_context)
+    bool(_effective_question) or bool(images_bytes) or bool(_combined_extra_context)
 ) and not _quota_reached
 
 if st.session_state.current_results is not None:
@@ -1138,7 +1212,7 @@ if start_button or _fup_question:
     _previous_ctx      = _fup_ctx      # None for regular questions
     _active_images     = [] if _fup_question else images_bytes
     _active_images_mime = [] if _fup_question else images_mime
-    _active_code_ctx   = "" if _fup_question else st.session_state.code_review_context
+    _active_code_ctx   = "" if _fup_question else _combined_extra_context
 
     if not _active_question.strip() and not _active_images and not _active_code_ctx:
         st.warning("Please provide a question, upload an image, or scan a project folder.")
