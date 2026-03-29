@@ -778,6 +778,9 @@ UI_QUOTA_REACHED       = "🚀 הגעת למכסה היומית שלך. נתרא
 # ── Follow-up question feature ───────────────────────────────────────────────
 UI_FOLLOWUP_LABEL          = "💬 שאלת המשך"
 UI_FOLLOWUP_PLACEHOLDER    = "הקלד שאלת המשך בהתבסס על הדיון למעלה..."
+UI_FOLLOWUP_IMG_LABEL      = "🖼️ צרף תמונות לניתוח (אופציונלי — עד 4)"
+UI_FOLLOWUP_DATA_LABEL     = "📎 צרף קבצי נתונים לניתוח (CSV, Excel, PDF, JSON, TXT ועוד)"
+UI_FOLLOWUP_DATA_LOADED    = "✅ {count} קבצים נטענו (~{chars:,} תווים)"
 UI_FOLLOWUP_SUBMIT_BTN     = "🔄 הפעל דיון המשך"
 
 # Context block injected into verified_context when a follow-up debate is run.

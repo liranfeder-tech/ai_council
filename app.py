@@ -111,6 +111,9 @@ from glossary import (
     UI_STILL_NOT_VERIFIED,
     UI_FOLLOWUP_LABEL,
     UI_FOLLOWUP_PLACEHOLDER,
+    UI_FOLLOWUP_IMG_LABEL,
+    UI_FOLLOWUP_DATA_LABEL,
+    UI_FOLLOWUP_DATA_LOADED,
     UI_FOLLOWUP_SUBMIT_BTN,
     UI_SUBMIT_BUTTON,
     UI_TECH_LOG_TITLE,
@@ -1386,16 +1389,19 @@ def _display_results(results: dict) -> None:
 # ---------------------------------------------------------------------------
 
 # ── Follow-up trigger: consume pending follow-up from session state ────────
-_fup_question = st.session_state.pop("_pending_followup", None)
-_fup_ctx      = st.session_state.pop("_followup_ctx", None)
+_fup_question   = st.session_state.pop("_pending_followup", None)
+_fup_ctx        = st.session_state.pop("_followup_ctx", None)
+_fup_imgs_carry = st.session_state.pop("_pending_followup_imgs", [])
+_fup_mime_carry = st.session_state.pop("_pending_followup_mime", [])
+_fup_data_carry = st.session_state.pop("_pending_followup_data", "")
 
-if start_button or _fup_question:
+if start_button or _fup_question is not None:
     # Resolve the effective question and context for this run
-    _active_question   = _fup_question or _effective_question
-    _previous_ctx      = _fup_ctx      # None for regular questions
-    _active_images     = [] if _fup_question else images_bytes
-    _active_images_mime = [] if _fup_question else images_mime
-    _active_code_ctx   = "" if _fup_question else _combined_extra_context
+    _active_question    = _fup_question if _fup_question is not None else _effective_question
+    _previous_ctx       = _fup_ctx      # None for regular questions
+    _active_images      = _fup_imgs_carry if _fup_question is not None else images_bytes
+    _active_images_mime = _fup_mime_carry if _fup_question is not None else images_mime
+    _active_code_ctx    = _fup_data_carry if _fup_question is not None else _combined_extra_context
 
     if not _active_question.strip() and not _active_images and not _active_code_ctx:
         st.warning("Please provide a question, upload an image, or scan a project folder.")
@@ -1408,7 +1414,7 @@ if start_button or _fup_question:
 
     # ── Cache-hit check: skip for follow-ups (always unique) ─────────────────
     if _active_question.strip() and not _active_images and not st.session_state._force_rerun \
-            and not _fup_question:
+            and _fup_question is None:
         _uid_for_cache = (st.session_state.user or {}).get("uid")
         _hist_for_cache = get_user_history(_uid_for_cache) if _uid_for_cache else load_history()
         _q_norm = _active_question.strip().lower()
@@ -1440,9 +1446,11 @@ if start_button or _fup_question:
 
     _n_imgs = len(_active_images)
     _main_label = (
-        f"👁️ Vision Council — analysing {_n_imgs} image{'s' if _n_imgs > 1 else ''} …"
+        f"{'🔄' if _fup_question is not None else '👁️'} "
+        f"{'Follow-up' if _fup_question is not None else 'Vision'} Council"
+        f" — analysing {_n_imgs} image{'s' if _n_imgs > 1 else ''} …"
         if _active_images
-        else ("🔄 AI Council — Follow-up Debate …" if _fup_question
+        else ("🔄 AI Council — Follow-up Debate …" if _fup_question is not None
               else "🤖 AI Council is deliberating …")
     )
 
@@ -1624,18 +1632,65 @@ if st.session_state.current_results:
 
     # ── Follow-up question panel ───────────────────────────────────────────
     st.divider()
-    _fup_key = f"followup_{st.session_state._query_counter}"
-    _fup_q   = st.text_area(
+    _fup_key      = f"followup_{st.session_state._query_counter}"
+    _fup_img_key  = f"followup_img_{st.session_state._query_counter}"
+    _fup_data_key = f"followup_data_{st.session_state._query_counter}"
+
+    _fup_q = st.text_area(
         label=UI_FOLLOWUP_LABEL,
         placeholder=UI_FOLLOWUP_PLACEHOLDER,
         height=90,
         key=_fup_key,
     )
-    if st.button(UI_FOLLOWUP_SUBMIT_BTN, type="primary",
-                 disabled=not bool((_fup_q or "").strip())):
-        st.session_state["_pending_followup"]  = _fup_q.strip()
-        st.session_state["_followup_ctx"]      = st.session_state.current_results
-        st.session_state.current_results       = None
-        st.session_state.from_history          = False
-        st.session_state._query_counter       += 1
+
+    # Image uploader
+    _fup_img_files = st.file_uploader(
+        UI_FOLLOWUP_IMG_LABEL,
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key=_fup_img_key,
+    )
+    _fup_imgs:      list = []
+    _fup_imgs_mime: list = []
+    if _fup_img_files:
+        for _ff in _fup_img_files[:4]:
+            _fup_imgs.append(_ff.getvalue())
+            _fup_imgs_mime.append(_ff.type or "image/jpeg")
+        _fup_img_cols = st.columns(min(len(_fup_img_files), 4))
+        for _fc, _ff in zip(_fup_img_cols, _fup_img_files[:4]):
+            with _fc:
+                st.image(_ff.getvalue(), use_container_width=True)
+                st.caption(f"{_ff.name} · {len(_ff.getvalue()) // 1024} KB")
+
+    # Data file uploader (CSV, Excel, PDF, JSON, TXT, DOCX…)
+    _fup_data_files = st.file_uploader(
+        UI_FOLLOWUP_DATA_LABEL,
+        type=FILE_UPLOAD_ACCEPTED_TYPES,
+        accept_multiple_files=True,
+        key=_fup_data_key,
+        help=f"עד {FILE_UPLOAD_MAX_SIZE_MB} MB לקובץ. התוכן יוזרק לכל המודלים כהקשר.",
+    )
+    _fup_data_ctx = ""
+    if _fup_data_files:
+        _fup_pairs = [(f.name, f.getvalue()) for f in _fup_data_files]
+        _fup_data_ctx, _fup_data_warns = build_file_context(_fup_pairs)
+        if _fup_data_ctx:
+            st.success(UI_FOLLOWUP_DATA_LOADED.format(
+                count=len(_fup_data_files), chars=len(_fup_data_ctx),
+            ))
+            if _fup_data_warns:
+                st.caption(f"⚠️ {len(_fup_data_warns)} הערות טעינה")
+
+    _fup_can_submit = (
+        bool((_fup_q or "").strip()) or bool(_fup_imgs) or bool(_fup_data_ctx)
+    )
+    if st.button(UI_FOLLOWUP_SUBMIT_BTN, type="primary", disabled=not _fup_can_submit):
+        st.session_state["_pending_followup"]       = (_fup_q or "").strip()
+        st.session_state["_followup_ctx"]           = st.session_state.current_results
+        st.session_state["_pending_followup_imgs"]  = _fup_imgs
+        st.session_state["_pending_followup_mime"]  = _fup_imgs_mime
+        st.session_state["_pending_followup_data"]  = _fup_data_ctx
+        st.session_state.current_results            = None
+        st.session_state.from_history               = False
+        st.session_state._query_counter            += 1
         st.rerun()
