@@ -821,13 +821,15 @@ def run_council_debate(
     if previous_context:
         prev_q      = previous_context.get("question", "")
         prev_answer = previous_context.get("final_answer", "")
-        context_parts.insert(
-            0,
-            FOLLOWUP_CONTEXT_BLOCK.format(
-                prev_question=prev_q,
-                prev_answer=prev_answer[:3000],   # cap to avoid token overflow
-            ),
+        # Use str.replace instead of .format() — the previous answer often
+        # contains curly braces (JSON, formulas, tables) that would cause
+        # a KeyError if passed through Python's str.format().
+        fup_block = (
+            FOLLOWUP_CONTEXT_BLOCK
+            .replace("{prev_question}", prev_q)
+            .replace("{prev_answer}",  prev_answer[:3000])
         )
+        context_parts.insert(0, fup_block)
 
     verified_context = "\n\n".join(context_parts)
 
