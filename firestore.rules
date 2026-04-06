@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Per-user debate history — only the owner can read/write
+    match /users/{userId}/debates/{debateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Per-user daily usage stats — only the owner can read/write
+    match /usage_stats/{userId}/daily/{day} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Global council_debates fallback (no uid) — require authentication
+    match /council_debates/{debateId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
