@@ -817,6 +817,12 @@ if not _current_user.get("email_verified", False):
             _vcheck = get_email_verified(_id_tok)
             if _vcheck is True:
                 st.session_state.user["email_verified"] = True
+                # Persist the updated status to localStorage so the gate
+                # does not re-appear on the next page refresh or login.
+                _updated_json = json.dumps(st.session_state.user)
+                st_javascript(
+                    f"localStorage.setItem('ai_council_user', {json.dumps(_updated_json)})"
+                )
                 st.rerun()
             elif _vcheck is False:
                 st.warning(UI_STILL_NOT_VERIFIED)

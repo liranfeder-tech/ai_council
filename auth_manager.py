@@ -22,10 +22,31 @@ Both sign_in() and sign_up() return either:
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from typing import Union
 
 import requests
+
+
+def _jwt_email_verified(id_token: str) -> bool:
+    """
+    Decode the JWT payload (no signature verification needed — we trust
+    Firebase's own token) and extract the email_verified claim.
+    This avoids a second round-trip to /accounts:lookup and eliminates
+    the propagation-delay race condition that caused the verification
+    gate to fire even for already-verified users.
+    """
+    try:
+        parts = id_token.split(".")
+        if len(parts) != 3:
+            return False
+        padding = "=" * (4 - len(parts[1]) % 4)
+        payload = json.loads(base64.b64decode(parts[1] + padding).decode())
+        return bool(payload.get("email_verified", False))
+    except Exception:
+        return False
 
 # Firebase Identity Toolkit REST endpoints
 _SIGN_IN_URL        = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
@@ -147,9 +168,10 @@ def sign_in(email: str, password: str) -> Union[UserInfo, str]:
         {"email": email, "password": password, "returnSecureToken": True},
     )
     if isinstance(result, dict):
-        # Firebase sign-in response does NOT include emailVerified — fetch it.
-        verified = get_email_verified(result["id_token"])
-        result["email_verified"] = verified is True
+        # Firebase signInWithPassword response omits emailVerified.
+        # Read it directly from the JWT payload — no extra API call needed,
+        # no propagation-delay race condition.
+        result["email_verified"] = _jwt_email_verified(result["id_token"])
     return result
 
 
