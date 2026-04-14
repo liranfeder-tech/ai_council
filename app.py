@@ -145,6 +145,13 @@ from glossary import (
     UI_MEDIA_ERROR_PREFIX,
     UI_MEDIA_NO_REPLICATE_KEY,
     UI_MEDIA_REGEN_BTN,
+    UI_MEDIA_VIDEO_MODE_LABEL,
+    UI_MEDIA_VIDEO_MODE_SINGLE,
+    UI_MEDIA_VIDEO_MODE_STORY,
+    UI_MEDIA_STORYBOARD_HDR,
+    UI_MEDIA_STORYBOARD_NOTE,
+    UI_MEDIA_SCENE_GENERATING,
+    UI_MEDIA_STEP_STORYBOARD,
     CULTURAL_PROFILES,
     UI_CULTURAL_EXPANDER,
     UI_CULTURAL_CAPTION,
@@ -1323,6 +1330,7 @@ def _render_media_panel(results: dict) -> None:
         _vid_ctx_key   = f"media_vid_ctx_{qc}"
         _vid_model_key = f"media_vid_model_{qc}"
         _vid_ar_key    = f"media_vid_ar_{qc}"
+        _vid_mode_key  = f"media_vid_mode_{qc}"
         _vid_res_key   = f"media_vid_result_{qc}"
         _vid_n_key     = f"media_vid_n_{qc}"
 
@@ -1341,7 +1349,14 @@ def _render_media_panel(results: dict) -> None:
             help=UI_MEDIA_CONTEXT_HELP,
         )
 
-        col_model, col_ar = st.columns(2)
+        col_mode, col_model, col_ar = st.columns(3)
+        with col_mode:
+            _vid_mode = st.radio(
+                UI_MEDIA_VIDEO_MODE_LABEL,
+                [UI_MEDIA_VIDEO_MODE_SINGLE, UI_MEDIA_VIDEO_MODE_STORY],
+                key=_vid_mode_key,
+            )
+            _storyboard_mode = (_vid_mode == UI_MEDIA_VIDEO_MODE_STORY)
         with col_model:
             _vid_model_options = {cfg["label"]: key for key, cfg in VIDEO_MODELS.items()}
             _vid_model_label = st.selectbox(
@@ -1358,68 +1373,129 @@ def _render_media_panel(results: dict) -> None:
             )
             _ar_val = UI_MEDIA_SIZE_OPTIONS[_ar_label]
 
-        # Display cached video (if any) above the generate button
-        _cached_vid = st.session_state.get(_vid_res_key)
-        if _cached_vid and _cached_vid.get("bytes"):
-            st.video(_cached_vid["bytes"])
-            with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
-                st.code(_cached_vid["prompt"], language=None)
-            dl_col, regen_col = st.columns(2)
-            with dl_col:
-                st.download_button(
-                    UI_MEDIA_DL_VID_BTN,
-                    data=_cached_vid["bytes"],
-                    file_name="ai_council_campaign.mp4",
-                    mime="video/mp4",
-                    use_container_width=True,
-                    key=f"dl_vid_{qc}_{_cached_vid['gen_n']}",
-                )
-            with regen_col:
-                if st.button(
-                    UI_MEDIA_REGEN_BTN,
-                    use_container_width=True,
-                    key=f"regen_vid_{qc}_{_cached_vid['gen_n']}",
-                ):
-                    del st.session_state[_vid_res_key]
-                    st.rerun()
+        if _storyboard_mode:
+            st.caption(
+                "Claude יכתוב תסריט 3 סצינות, כל אחת ממוקדת בפעולה אחת בלבד. "
+                "הקליפים יוצרו ברצף — **משך כולל: ~15-18 שניות.**"
+            )
 
+        # ── Display cached results ────────────────────────────────────────────
+        _cached = st.session_state.get(_vid_res_key)
+        if _cached:
+            if isinstance(_cached, list):
+                # Storyboard result
+                st.markdown(f"### {UI_MEDIA_STORYBOARD_HDR}")
+                st.caption(UI_MEDIA_STORYBOARD_NOTE)
+                for scene in _cached:
+                    _s_title = scene.get("title", f"סצינה {scene.get('scene_number','')}")
+                    _s_bytes = scene.get("bytes")
+                    _s_err   = scene.get("error")
+                    _s_prom  = scene.get("prompt_used", "")
+                    _s_n     = scene.get("scene_number", 0)
+                    st.markdown(f"**{_s_title}**")
+                    if _s_err:
+                        st.error(f"{UI_MEDIA_ERROR_PREFIX}: {_s_err}")
+                    elif _s_bytes:
+                        st.video(_s_bytes)
+                        dl_col2, _ = st.columns([1, 1])
+                        with dl_col2:
+                            _gen_n = st.session_state.get(_vid_n_key, 1)
+                            st.download_button(
+                                UI_MEDIA_DL_VID_BTN,
+                                data=_s_bytes,
+                                file_name=f"scene_{_s_n}.mp4",
+                                mime="video/mp4",
+                                use_container_width=True,
+                                key=f"dl_scene_{qc}_{_gen_n}_{_s_n}",
+                            )
+                    if _s_prom:
+                        with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                            st.code(_s_prom, language=None)
+            elif isinstance(_cached, dict) and _cached.get("bytes"):
+                # Single clip result
+                st.video(_cached["bytes"])
+                with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                    st.code(_cached["prompt"], language=None)
+                dl_col, regen_col = st.columns(2)
+                with dl_col:
+                    st.download_button(
+                        UI_MEDIA_DL_VID_BTN,
+                        data=_cached["bytes"],
+                        file_name="ai_council_campaign.mp4",
+                        mime="video/mp4",
+                        use_container_width=True,
+                        key=f"dl_vid_{qc}_{_cached['gen_n']}",
+                    )
+                with regen_col:
+                    if st.button(
+                        UI_MEDIA_REGEN_BTN,
+                        use_container_width=True,
+                        key=f"regen_vid_{qc}_{_cached['gen_n']}",
+                    ):
+                        del st.session_state[_vid_res_key]
+                        st.rerun()
+
+        # ── Generate button ───────────────────────────────────────────────────
+        _btn_label = UI_MEDIA_GENERATE_VID_BTN if not _storyboard_mode else "🎬 צור סטוריבורד (3 קליפים)"
         if st.button(
-            UI_MEDIA_GENERATE_VID_BTN,
+            _btn_label,
             type="primary",
             use_container_width=True,
             disabled=not _replicate_ok,
             key=f"gen_vid_btn_{qc}",
         ):
-            _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
-            with _status:
-                vid_prompt = generate_video_prompt(
-                    _final, _vid_ctx or "",
-                    question=results.get("question", ""),
-                )
-                st.write(UI_MEDIA_STEP_VIDEO)
-                result = generate_video(
-                    vid_prompt,
-                    model_key=_vid_model_val,
-                    aspect_ratio=_ar_val,
-                )
-                if result["error"]:
-                    _status.update(
-                        label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
-                        state="error",
-                        expanded=True,
+            from media_generator import generate_video_storyboard
+
+            _n = st.session_state.get(_vid_n_key, 0) + 1
+            st.session_state[_vid_n_key] = _n
+            _question = results.get("question", "")
+
+            if _storyboard_mode:
+                _status = st.status(UI_MEDIA_STEP_STORYBOARD, expanded=True)
+                with _status:
+                    scenes = generate_video_storyboard(
+                        final_answer=_final,
+                        question=_question,
+                        campaign_context=_vid_ctx or "",
+                        model_key=_vid_model_val,
+                        aspect_ratio=_ar_val,
+                        progress_cb=lambda n, total, status: st.write(
+                            UI_MEDIA_SCENE_GENERATING.format(n=n)
+                        ),
                     )
-                    st.error(result["error"])
-                else:
-                    _status.update(label="הושלם!", state="complete", expanded=False)
-                    _n = st.session_state.get(_vid_n_key, 0) + 1
-                    st.session_state[_vid_n_key] = _n
-                    st.session_state[_vid_res_key] = {
-                        "bytes":  result["bytes"],
-                        "url":    result["url"],
-                        "prompt": result["prompt_used"],
-                        "gen_n":  _n,
-                    }
-                    st.rerun()
+                    any_ok = any(not s.get("error") for s in scenes)
+                    _status.update(
+                        label="הושלם!" if any_ok else "שגיאה בחלק מהקליפים",
+                        state="complete" if any_ok else "error",
+                        expanded=False,
+                    )
+                st.session_state[_vid_res_key] = scenes
+                st.rerun()
+            else:
+                _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
+                with _status:
+                    vid_prompt = generate_video_prompt(
+                        _final, _vid_ctx or "", question=_question,
+                    )
+                    st.write(UI_MEDIA_STEP_VIDEO)
+                    result = generate_video(
+                        vid_prompt, model_key=_vid_model_val, aspect_ratio=_ar_val,
+                    )
+                    if result["error"]:
+                        _status.update(
+                            label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
+                            state="error", expanded=True,
+                        )
+                        st.error(result["error"])
+                    else:
+                        _status.update(label="הושלם!", state="complete", expanded=False)
+                        st.session_state[_vid_res_key] = {
+                            "bytes":  result["bytes"],
+                            "url":    result["url"],
+                            "prompt": result["prompt_used"],
+                            "gen_n":  _n,
+                        }
+                        st.rerun()
 
 
 def _render_cultural_panel(results: dict) -> None:

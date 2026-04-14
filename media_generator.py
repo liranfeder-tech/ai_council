@@ -17,6 +17,7 @@ Add a new entry to VIDEO_MODELS below and the rest of the code picks it up.
 from __future__ import annotations
 
 import base64
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -422,3 +423,128 @@ def generate_cultural_variants(
 
     # Return in original selection order
     return [results_map[name] for name in selected_markets if name in results_map]
+
+
+# ---------------------------------------------------------------------------
+# Storyboard — 3 sequential clips that together tell a complete story
+# ---------------------------------------------------------------------------
+
+def _parse_storyboard_json(raw: str) -> list[dict]:
+    """
+    Parse Claude's JSON storyboard output.
+    Strips markdown fences if present and returns the list of scene dicts.
+    Falls back to an empty list on any parse error.
+    """
+    raw = raw.strip()
+    # Strip ```json ... ``` or ``` ... ``` fences
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.rsplit("```", 1)[0]
+    try:
+        data = json.loads(raw.strip())
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def generate_video_storyboard(
+    final_answer: str,
+    question: str = "",
+    campaign_context: str = "",
+    model_key: str = "minimax",
+    aspect_ratio: str = "landscape",
+    progress_cb=None,
+) -> list[dict]:
+    """
+    Generate a 3-scene sequential video storyboard.
+
+    Claude writes a 3-scene script (JSON), then each scene is rendered into
+    a video clip independently. The clips are intended to be played in order.
+
+    Parameters
+    ----------
+    final_answer : str
+        Council debate final answer used as creative source.
+    question : str
+        Original user question / product description for context.
+    campaign_context : str
+        Optional extra campaign notes.
+    model_key : str
+        Replicate video model key (see VIDEO_MODELS).
+    aspect_ratio : str
+        "landscape", "portrait", or "square".
+    progress_cb : callable, optional
+        Called as progress_cb(scene_number, total=3, status="generating"|"done"|"error")
+        to report per-scene progress to the UI.
+
+    Returns
+    -------
+    list[dict]
+        One dict per scene:
+        {scene_number, title, prompt_used, bytes, url, error}
+    """
+    from ai_factory import call_model
+    from glossary import PROMPT_MEDIA_VIDEO_STORYBOARD
+
+    # ── Step 1: ask Claude to write the 3-scene storyboard ───────────────────
+    storyboard_prompt = PROMPT_MEDIA_VIDEO_STORYBOARD.format(
+        question=question.strip() or "See council answer below.",
+        final_answer=final_answer.strip(),
+        campaign_context=campaign_context.strip() or "None provided",
+    )
+    raw_json = call_model("claude", storyboard_prompt)
+    scenes   = _parse_storyboard_json(raw_json)
+
+    if not scenes:
+        return [{
+            "scene_number": 0,
+            "title":        "שגיאה",
+            "prompt_used":  raw_json,
+            "bytes":        None,
+            "url":          None,
+            "error":        "Claude לא החזיר JSON תקין. נסה שוב.",
+        }]
+
+    # ── Step 2: generate each scene clip sequentially ────────────────────────
+    # Sequential (not parallel) so Replicate queue doesn't pile up and
+    # so the progress_cb can report scene-by-scene to the UI.
+    results: list[dict] = []
+    for scene in scenes:
+        n      = scene.get("scene_number", len(results) + 1)
+        title  = scene.get("title", f"סצינה {n}")
+        prompt = scene.get("prompt", "")
+
+        if progress_cb:
+            progress_cb(n, total=len(scenes), status="generating")
+
+        if not prompt:
+            results.append({
+                "scene_number": n,
+                "title":        title,
+                "prompt_used":  "",
+                "bytes":        None,
+                "url":          None,
+                "error":        "סצינה ריקה — Claude לא סיפק prompt",
+            })
+            continue
+
+        clip = generate_video(prompt, model_key=model_key, aspect_ratio=aspect_ratio)
+
+        if progress_cb:
+            progress_cb(n, total=len(scenes),
+                        status="done" if not clip["error"] else "error")
+
+        results.append({
+            "scene_number": n,
+            "title":        title,
+            "prompt_used":  clip["prompt_used"],
+            "bytes":        clip["bytes"],
+            "url":          clip.get("url"),
+            "error":        clip["error"],
+        })
+
+    return results

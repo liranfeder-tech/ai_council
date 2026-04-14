@@ -1319,6 +1319,51 @@ used in a specific, realistic scenario — nothing more.
 
 Write the video prompt now — one paragraph, no headers, English only:"""
 
+PROMPT_MEDIA_VIDEO_STORYBOARD = """\
+You are a senior creative director writing a 3-scene video storyboard for an ultra-short \
+mobile app ad (each scene is exactly 5-6 seconds, designed for AI video generation).
+
+CRITICAL CONSTRAINT — AI video models can only render:
+- ONE character performing ONE simple physical action
+- A simple, static or gently-moving background
+- Basic camera movement (slow push-in, handheld drift, slight tilt)
+They CANNOT render: complex narrative, multiple cuts within a clip, text on screen, \
+phone UI, lip-sync dialogue, or anything requiring editing.
+
+--- Product Description ---
+{question}
+
+--- AI Council Key Insights ---
+{final_answer}
+
+--- Additional Campaign Context ---
+{campaign_context}
+
+## Your task: write a 3-scene storyboard as a JSON array.
+
+Each scene object must have EXACTLY these keys:
+  "scene_number": integer 1, 2, or 3
+  "title": short Hebrew label shown to the user (e.g. "סצינה 1 — המצוקה")
+  "prompt": the AI video generation prompt in English — ONE simple visual moment:
+            [SHOT TYPE] + [CHARACTER description] + [SINGLE PHYSICAL ACTION] + \
+            [VISIBLE ENVIRONMENT detail] + [CAMERA MOVEMENT] + [LIGHTING/GRADE]
+            Max 80 words. No narrative. No dialogue description. No phone screens.
+            Describe only what the camera physically sees.
+
+## Story arc to follow:
+- Scene 1 — SETUP: Show the character in a tense/vulnerable situation (NO product yet)
+- Scene 2 — TRIGGER: Show the exact moment of using the product (one specific physical gesture)
+- Scene 3 — PAYOFF: Show the emotional resolution / rescue moment
+
+## Example for a personal safety app:
+[
+  {{"scene_number": 1, "title": "סצינה 1 — המצוקה", "prompt": "Extreme close-up of a young woman's face at a dimly lit bar, eyes wide with fear, glancing sideways nervously, shallow depth of field, slow handheld drift, desaturated teal thriller grade."}},
+  {{"scene_number": 2, "title": "סצינה 2 — מילת הקוד", "prompt": "Close-up of woman's lips barely moving as she whispers, chin slightly down, fingers tight around a glass, barely-visible phone in peripheral, slow push-in on face, high-contrast blue shadow grade."}},
+  {{"scene_number": 3, "title": "סצינה 3 — העזרה מגיעה", "prompt": "A man's face lit by phone screen glow in a dark room, expression shifting from calm to urgent alertness as he stands up abruptly, handheld, warm amber light from screen, deep shadow background."}}
+]
+
+Output ONLY valid JSON — no explanation, no markdown fences, no extra text:"""
+
 # ---------------------------------------------------------------------------
 # Media panel — UI strings (Hebrew, matching the app's language convention)
 # ---------------------------------------------------------------------------
@@ -1351,6 +1396,13 @@ UI_MEDIA_NO_REPLICATE_KEY  = (
     "והוסף שורה `REPLICATE_API_TOKEN=your_token` לקובץ `.env`."
 )
 UI_MEDIA_REGEN_BTN         = "🔄 צור שוב"
+UI_MEDIA_VIDEO_MODE_LABEL  = "מצב ייצור"
+UI_MEDIA_VIDEO_MODE_SINGLE = "קליפ בודד (5-6 שניות)"
+UI_MEDIA_VIDEO_MODE_STORY  = "סטוריבורד — 3 קליפים (15-18 שניות יחד)"
+UI_MEDIA_STORYBOARD_HDR    = "🎬 הסרטון השיווקי — 3 קליפים"
+UI_MEDIA_STORYBOARD_NOTE   = "הצג את 3 הקליפים ברצף לקהל היעד — יחד הם מספרים סיפור מלא"
+UI_MEDIA_SCENE_GENERATING  = "מייצר קליפ {n}/3..."
+UI_MEDIA_STEP_STORYBOARD   = "שלב 1/2 — בונה תסריט 3 סצינות עם Claude..."
 
 # ---------------------------------------------------------------------------
 # Cultural Campaign Generator — market profiles and UI strings
