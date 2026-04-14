@@ -77,6 +77,40 @@ _AR_MAP: dict[str, str] = {
     "square":    "1:1",
 }
 
+# ---------------------------------------------------------------------------
+# Visual style — prompt suffixes and DALL-E style parameter
+# ---------------------------------------------------------------------------
+# Appended to the final prompt *after* Claude's creative brief so the style
+# instruction is always present regardless of what Claude writes.
+
+_IMG_STYLE_SUFFIX: dict[str, str] = {
+    "realistic": (
+        " Photorealistic cinematic photography, DSLR lens, 4K resolution, "
+        "natural lighting, shallow depth of field."
+    ),
+    "animation": (
+        " 2D animated illustration, bold clean outlines, flat vibrant colours, "
+        "studio lighting, stylised characters, Disney-Pixar aesthetic."
+    ),
+}
+
+# DALL-E 3 accepts "natural" (muted/realistic) or "vivid" (hyper-real/dramatic)
+_DALLE_STYLE_PARAM: dict[str, str] = {
+    "realistic": "natural",
+    "animation": "vivid",
+}
+
+_VID_STYLE_SUFFIX: dict[str, str] = {
+    "realistic": (
+        " Cinematic photorealistic footage, shallow depth of field, "
+        "natural colour grading."
+    ),
+    "animation": (
+        " 2D animated, bold outlines, vibrant flat colours, "
+        "smooth character motion, stylised."
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -129,7 +163,34 @@ def analyse_branding(
         return ""
 
 
-def generate_image_prompt(final_answer: str, campaign_context: str = "") -> str:
+def analyse_reference_images(
+    image_bytes: list,
+    image_mime: list,
+) -> str:
+    """
+    Use Claude Vision to describe uploaded reference images (product shots,
+    character photos, scene references) and return a compact visual description
+    that can be injected into image / video generation prompts.
+
+    Returns an empty string if no images are provided or on any error.
+    """
+    if not image_bytes:
+        return ""
+    try:
+        from ai_factory import call_model_with_citations
+        from glossary import PROMPT_MEDIA_REF_ANALYSIS
+        result, _ = call_model_with_citations(
+            "claude",
+            PROMPT_MEDIA_REF_ANALYSIS,
+            images=image_bytes[:3],
+            images_mime=image_mime[:3],
+        )
+        return result.strip()
+    except Exception:
+        return ""
+
+
+def generate_image_prompt(final_answer: str, campaign_context: str = "", ref_description: str = "") -> str:
     """
     Ask the council's master model to distil the debate answer into an
     optimised DALL-E 3 image prompt.
@@ -139,9 +200,15 @@ def generate_image_prompt(final_answer: str, campaign_context: str = "") -> str:
     from ai_factory import call_model
     from glossary import PROMPT_MEDIA_IMAGE_BRIEF
 
+    ref_section = (
+        f"--- Reference Images (use these visual details in the prompt) ---\n{ref_description}"
+        if ref_description.strip()
+        else ""
+    )
     brief = PROMPT_MEDIA_IMAGE_BRIEF.format(
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
+        ref_section=ref_section,
     )
     result = call_model("claude", brief)
     # Strip any accidental markdown fences the model might add
@@ -152,6 +219,7 @@ def generate_video_prompt(
     final_answer: str,
     campaign_context: str = "",
     question: str = "",
+    ref_description: str = "",
     sanitise: bool = True,
 ) -> str:
     """
@@ -163,10 +231,16 @@ def generate_video_prompt(
     from ai_factory import call_model
     from glossary import PROMPT_MEDIA_VIDEO_BRIEF
 
+    ref_section = (
+        f"--- Reference Images (use these visual details in the prompt) ---\n{ref_description}"
+        if ref_description.strip()
+        else ""
+    )
     brief = PROMPT_MEDIA_VIDEO_BRIEF.format(
         question=question.strip() or "See council answer below.",
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
+        ref_section=ref_section,
     )
     result = call_model("claude", brief).strip().strip("`").strip()
     return _sanitise_video_prompt(result) if sanitise else result
@@ -179,6 +253,7 @@ def generate_video_prompt(
 def generate_image(
     prompt: str,
     size: str = "landscape",
+    style: str = "realistic",
 ) -> dict:
     """
     Generate a single marketing image with DALL-E 3.
@@ -189,6 +264,9 @@ def generate_image(
         The creative brief / image description (English).
     size : str
         One of "landscape", "portrait", or "square".
+    style : str
+        "realistic" → DALL-E style="natural" + photorealistic suffix.
+        "animation" → DALL-E style="vivid" + animated illustration suffix.
 
     Returns
     -------
@@ -205,15 +283,18 @@ def generate_image(
             "error": "OPENAI_API_KEY לא מוגדר. הוסף אותו ל-.env",
         }
 
-    size_str = IMAGE_SIZES.get(size, IMAGE_SIZES["landscape"])
+    size_str   = IMAGE_SIZES.get(size, IMAGE_SIZES["landscape"])
+    dalle_style = _DALLE_STYLE_PARAM.get(style, "natural")
+    full_prompt = prompt + _IMG_STYLE_SUFFIX.get(style, "")
 
     try:
         client = openai.OpenAI(api_key=key, timeout=60)
         response = client.images.generate(
             model="dall-e-3",
-            prompt=prompt,
+            prompt=full_prompt,
             size=size_str,          # type: ignore[arg-type]
             quality="hd",
+            style=dalle_style,      # type: ignore[arg-type]
             response_format="b64_json",
             n=1,
         )
@@ -237,6 +318,7 @@ def generate_video(
     prompt: str,
     model_key: str = "minimax",
     aspect_ratio: str = "landscape",
+    style: str = "realistic",
 ) -> dict:
     """
     Generate a short marketing clip via Replicate.
@@ -249,6 +331,9 @@ def generate_video(
         Key into VIDEO_MODELS registry.
     aspect_ratio : str
         One of "landscape", "portrait", "square".
+    style : str
+        "realistic" → append cinematic photorealistic suffix.
+        "animation" → append 2D animated style suffix.
 
     Returns
     -------
@@ -270,10 +355,13 @@ def generate_video(
             ),
         }
 
+    # Append style suffix to the prompt
+    styled_prompt = prompt + _VID_STYLE_SUFFIX.get(style, "")
+
     model_cfg = VIDEO_MODELS.get(model_key, VIDEO_MODELS["minimax"])
     model_id  = model_cfg["id"]
     ar_str    = _AR_MAP.get(aspect_ratio, "16:9")
-    inputs    = model_cfg["input"](prompt, ar_str)
+    inputs    = model_cfg["input"](styled_prompt, ar_str)
 
     try:
         import replicate  # type: ignore[import-untyped]
@@ -306,7 +394,7 @@ def generate_video(
         return {
             "bytes": video_bytes,
             "url": video_url,
-            "prompt_used": prompt,
+            "prompt_used": styled_prompt,
             "error": None,
         }
 
@@ -514,6 +602,8 @@ def generate_video_storyboard(
     campaign_context: str = "",
     model_key: str = "minimax",
     aspect_ratio: str = "landscape",
+    ref_description: str = "",
+    style: str = "realistic",
     progress_cb=None,
 ) -> list[dict]:
     """
@@ -534,6 +624,10 @@ def generate_video_storyboard(
         Replicate video model key (see VIDEO_MODELS).
     aspect_ratio : str
         "landscape", "portrait", or "square".
+    ref_description : str
+        Output of analyse_reference_images() — visual context injected into prompt.
+    style : str
+        "realistic" or "animation" — style suffix appended to each scene prompt.
     progress_cb : callable, optional
         Called as progress_cb(scene_number, total=3, status="generating"|"done"|"error")
         to report per-scene progress to the UI.
@@ -547,11 +641,18 @@ def generate_video_storyboard(
     from ai_factory import call_model
     from glossary import PROMPT_MEDIA_VIDEO_STORYBOARD
 
+    ref_section = (
+        f"--- Reference Images (use these visual details in each scene) ---\n{ref_description}"
+        if ref_description.strip()
+        else ""
+    )
+
     # ── Step 1: ask Claude to write the 3-scene storyboard ───────────────────
     storyboard_prompt = PROMPT_MEDIA_VIDEO_STORYBOARD.format(
         question=question.strip() or "See council answer below.",
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
+        ref_section=ref_section,
     )
     raw_json = call_model("claude", storyboard_prompt)
     scenes   = _parse_storyboard_json(raw_json)
@@ -591,7 +692,7 @@ def generate_video_storyboard(
 
         # Enforce hard word-limit before sending to the video API
         prompt = _sanitise_video_prompt(prompt, max_words=45)
-        clip = generate_video(prompt, model_key=model_key, aspect_ratio=aspect_ratio)
+        clip = generate_video(prompt, model_key=model_key, aspect_ratio=aspect_ratio, style=style)
 
         if progress_cb:
             progress_cb(n, total=len(scenes),
@@ -630,10 +731,10 @@ def _parse_image_storyboard_json(raw: str) -> list[dict]:
     return []
 
 
-def _generate_one_image(item: dict, size: str) -> dict:
+def _generate_one_image(item: dict, size: str, style: str = "realistic") -> dict:
     """Generate a single storyboard image. Called in parallel."""
     prompt = item.get("prompt", "")
-    result = generate_image(prompt, size=size)
+    result = generate_image(prompt, size=size, style=style)
     return {
         "image_number": item.get("image_number", 0),
         "title":        item.get("title", ""),
@@ -650,6 +751,8 @@ def generate_image_storyboard(
     n_images: int = 4,
     size: str = "landscape",
     branding_notes: str = "",
+    ref_description: str = "",
+    style: str = "realistic",
     max_workers: int = 4,
 ) -> list[dict]:
     """
@@ -672,6 +775,10 @@ def generate_image_storyboard(
         "landscape", "portrait", or "square".
     branding_notes : str
         Output of analyse_branding() — injected into the prompt.
+    ref_description : str
+        Output of analyse_reference_images() — visual context from reference images.
+    style : str
+        "realistic" or "animation" — controls DALL-E style param and prompt suffix.
     max_workers : int
         Parallel DALL-E calls (max 4 to stay within rate limits).
 
@@ -690,6 +797,11 @@ def generate_image_storyboard(
         if branding_notes.strip()
         else ""
     )
+    ref_section = (
+        f"--- Reference Images (preserve these visual elements across all scenes) ---\n{ref_description}\n"
+        if ref_description.strip()
+        else ""
+    )
     image_4_instruction = (
         "Image 4 — RESOLUTION: the happy outcome / relief moment"
         if n_images == 4
@@ -706,6 +818,7 @@ def generate_image_storyboard(
         question=question.strip() or "See campaign context.",
         campaign_context=campaign_context.strip() or "None provided",
         branding_section=branding_section,
+        ref_section=ref_section,
         image_4_instruction=image_4_instruction,
         image_4_json=image_4_json,
     )
@@ -724,7 +837,10 @@ def generate_image_storyboard(
 
     # Generate all images in parallel
     with ThreadPoolExecutor(max_workers=min(max_workers, len(scenes))) as ex:
-        futures = {ex.submit(_generate_one_image, scene, size): scene for scene in scenes}
+        futures = {
+            ex.submit(_generate_one_image, scene, size, style): scene
+            for scene in scenes
+        }
         results_map = {}
         for future in as_completed(futures):
             scene = futures[future]

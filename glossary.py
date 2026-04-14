@@ -1262,6 +1262,7 @@ message into a single, highly optimised DALL-E 3 image-generation prompt.
 --- Additional Campaign Context ---
 {campaign_context}
 
+{ref_section}
 ## Output Rules — follow EXACTLY
 
 1. Output ONLY the image prompt — no preamble, no explanation, no markdown headers.
@@ -1294,6 +1295,7 @@ used in a specific, realistic scenario — nothing more.
 --- Additional Campaign Context ---
 {campaign_context}
 
+{ref_section}
 ## CRITICAL RULES — violating any rule makes the prompt worthless
 
 ### FORBIDDEN (never include these):
@@ -1340,6 +1342,7 @@ HARD TECHNICAL LIMITS — the model generates ONE continuous 5-6 second shot per
 --- Campaign Context ---
 {campaign_context}
 
+{ref_section}
 Write 3 shot descriptions that together tell this story arc:
   Scene 1 — PROBLEM: the character in the difficult situation (no product yet)
   Scene 2 — ACTIVATION: the single physical gesture of using the product
@@ -1420,6 +1423,21 @@ UI_MEDIA_BRANDING_HELP      = (
 )
 UI_MEDIA_BRANDING_ANALYSING = "מנתח מיתוג האפליקציה עם Claude Vision..."
 UI_MEDIA_BRANDING_DONE      = "מיתוג אופיין — סגנון ייושם על כל הפרומפטים"
+
+# Reference images (product shots / app screenshots used as visual input)
+UI_MEDIA_REF_IMG_LABEL      = "תמונות רפרנס לייצור (אופציונלי)"
+UI_MEDIA_REF_IMG_HELP       = (
+    "העלה תמונות של המוצר, האפליקציה, דמויות, או כל חומר ויזואלי רלוונטי. "
+    "Claude ינתח אותן ויזריק את התיאור הויזואלי לפרומפטים — מה שיגרום לתוצאה "
+    "להיות קרובה יותר לחומרי המוצר שלך."
+)
+UI_MEDIA_REF_ANALYSING      = "מנתח תמונות רפרנס עם Claude Vision..."
+UI_MEDIA_REF_DONE           = "תמונות הרפרנס אופיינו — יישמשו להנחיה ויזואלית"
+
+# Visual style selector
+UI_MEDIA_STYLE_LABEL        = "סגנון ויזואלי"
+UI_MEDIA_STYLE_REALISTIC    = "📷 ריאליסטי — צילום קולנועי"
+UI_MEDIA_STYLE_ANIMATION    = "🎨 אנימציה — מצויר / מאויר"
 
 # ---------------------------------------------------------------------------
 # Cultural Campaign Generator — market profiles and UI strings
@@ -1600,6 +1618,21 @@ TYPOGRAPHY FEEL: describe font weight and style visible (e.g. "bold sans-serif, 
 Keep the entire brief under 80 words. This brief will be injected into image and video \
 generation prompts to ensure visual consistency with the app's brand."""
 
+PROMPT_MEDIA_REF_ANALYSIS = """\
+You are a visual analyst. Examine the uploaded reference image(s) carefully.
+
+Describe what you see in concise, visual language suitable as context for an AI \
+image or video generation prompt.
+
+Focus on:
+- Subject / character: appearance, clothing, expression, age range
+- Product / object: shape, colour, design details worth preserving
+- Environment / setting: location type, atmosphere, key props
+- Any distinctive visual details that should carry through to generated outputs
+
+Return a single plain-text paragraph, max 80 words, in English. \
+No markdown, no headers, no bullet points."""
+
 PROMPT_MEDIA_IMAGE_STORYBOARD = """\
 You are a senior creative director creating a {n_images}-image photo storyboard \
 for a mobile app marketing campaign.
@@ -1613,7 +1646,7 @@ Each image is a standalone cinematic photograph. Together they tell the full sto
 {campaign_context}
 
 {branding_section}
-
+{ref_section}
 Story arc ({n_images} images):
   Image 1 — SITUATION: the character and their problem, before the product (set the scene)
   Image 2 — ACTION: the exact moment of using the product

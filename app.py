@@ -166,6 +166,13 @@ from glossary import (
     UI_MEDIA_BRANDING_HELP,
     UI_MEDIA_BRANDING_ANALYSING,
     UI_MEDIA_BRANDING_DONE,
+    UI_MEDIA_REF_IMG_LABEL,
+    UI_MEDIA_REF_IMG_HELP,
+    UI_MEDIA_REF_ANALYSING,
+    UI_MEDIA_REF_DONE,
+    UI_MEDIA_STYLE_LABEL,
+    UI_MEDIA_STYLE_REALISTIC,
+    UI_MEDIA_STYLE_ANIMATION,
     CULTURAL_PROFILES,
     UI_CULTURAL_EXPANDER,
     UI_CULTURAL_CAPTION,
@@ -1309,12 +1316,15 @@ def _render_media_panel(results: dict) -> None:
     # ── Section 1: Image generation ──────────────────────────────────────────
     with st.expander(UI_MEDIA_IMAGE_EXPANDER, expanded=False):
 
-        _img_ctx_key   = f"media_img_ctx_{qc}"
-        _img_size_key  = f"media_img_size_{qc}"
-        _img_mode_key  = f"media_img_mode_{qc}"
-        _img_count_key = f"media_img_count_{qc}"
-        _img_res_key   = f"media_img_result_{qc}"
-        _img_n_key     = f"media_img_n_{qc}"
+        _img_ctx_key      = f"media_img_ctx_{qc}"
+        _img_size_key     = f"media_img_size_{qc}"
+        _img_mode_key     = f"media_img_mode_{qc}"
+        _img_count_key    = f"media_img_count_{qc}"
+        _img_res_key      = f"media_img_result_{qc}"
+        _img_n_key        = f"media_img_n_{qc}"
+        _img_style_key    = f"media_img_style_{qc}"
+        _img_ref_key      = f"media_img_ref_{qc}"
+        _img_ref_res_key  = f"media_img_ref_notes_{qc}"
 
         col_ctx, col_size = st.columns([3, 2])
         with col_ctx:
@@ -1352,6 +1362,37 @@ def _render_media_panel(results: dict) -> None:
                 )
             else:
                 _n_images = 1
+
+        # ── Style selector ───────────────────────────────────────────────────
+        _img_style_choice = st.radio(
+            UI_MEDIA_STYLE_LABEL,
+            [UI_MEDIA_STYLE_REALISTIC, UI_MEDIA_STYLE_ANIMATION],
+            horizontal=True,
+            key=_img_style_key,
+        )
+        _img_style_val = "animation" if _img_style_choice == UI_MEDIA_STYLE_ANIMATION else "realistic"
+
+        # ── Reference images (optional per-section upload) ───────────────────
+        _img_ref_files = st.file_uploader(
+            UI_MEDIA_REF_IMG_LABEL,
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key=_img_ref_key,
+            help=UI_MEDIA_REF_IMG_HELP,
+        )
+        _img_ref_notes = st.session_state.get(_img_ref_res_key, "")
+        if _img_ref_files:
+            _ref_bytes = [f.getvalue() for f in _img_ref_files[:3]]
+            _ref_mime  = [f.type or "image/png" for f in _img_ref_files[:3]]
+            _ref_sig   = str(sorted(f.name for f in _img_ref_files))
+            if st.session_state.get(f"media_img_ref_sig_{qc}") != _ref_sig:
+                with st.spinner(UI_MEDIA_REF_ANALYSING):
+                    from media_generator import analyse_reference_images
+                    _img_ref_notes = analyse_reference_images(_ref_bytes, _ref_mime)
+                st.session_state[_img_ref_res_key]          = _img_ref_notes
+                st.session_state[f"media_img_ref_sig_{qc}"] = _ref_sig
+            if _img_ref_notes:
+                st.success(UI_MEDIA_REF_DONE)
 
         # ── Cached results ───────────────────────────────────────────────────
         _cached_img = st.session_state.get(_img_res_key)
@@ -1426,6 +1467,8 @@ def _render_media_panel(results: dict) -> None:
                         n_images=_n_images,
                         size=_size_val,
                         branding_notes=_branding_notes,
+                        ref_description=_img_ref_notes,
+                        style=_img_style_val,
                     )
                     any_ok = any(not s.get("error") for s in scenes)
                     _status.update(
@@ -1439,12 +1482,12 @@ def _render_media_panel(results: dict) -> None:
                 _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
                 with _status:
                     img_prompt = generate_image_prompt(
-                        _final, _img_ctx or "",
+                        _final, _img_ctx or "", ref_description=_img_ref_notes,
                     )
                     if _branding_notes:
                         img_prompt = f"[Brand guidelines: {_branding_notes}] " + img_prompt
                     st.write(UI_MEDIA_STEP_IMAGE)
-                    result = generate_image(img_prompt, size=_size_val)
+                    result = generate_image(img_prompt, size=_size_val, style=_img_style_val)
                     if result["error"]:
                         _status.update(
                             label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
@@ -1463,12 +1506,15 @@ def _render_media_panel(results: dict) -> None:
     # ── Section 2: Video generation ──────────────────────────────────────────
     with st.expander(UI_MEDIA_VIDEO_EXPANDER, expanded=False):
 
-        _vid_ctx_key   = f"media_vid_ctx_{qc}"
-        _vid_model_key = f"media_vid_model_{qc}"
-        _vid_ar_key    = f"media_vid_ar_{qc}"
-        _vid_mode_key  = f"media_vid_mode_{qc}"
-        _vid_res_key   = f"media_vid_result_{qc}"
-        _vid_n_key     = f"media_vid_n_{qc}"
+        _vid_ctx_key      = f"media_vid_ctx_{qc}"
+        _vid_model_key    = f"media_vid_model_{qc}"
+        _vid_ar_key       = f"media_vid_ar_{qc}"
+        _vid_mode_key     = f"media_vid_mode_{qc}"
+        _vid_res_key      = f"media_vid_result_{qc}"
+        _vid_n_key        = f"media_vid_n_{qc}"
+        _vid_style_key    = f"media_vid_style_{qc}"
+        _vid_ref_key      = f"media_vid_ref_{qc}"
+        _vid_ref_res_key  = f"media_vid_ref_notes_{qc}"
 
         _replicate_ok = bool(os.environ.get("REPLICATE_API_TOKEN"))
         if not _replicate_ok:
@@ -1508,6 +1554,37 @@ def _render_media_panel(results: dict) -> None:
                 key=_vid_ar_key,
             )
             _ar_val = UI_MEDIA_SIZE_OPTIONS[_ar_label]
+
+        # ── Style selector ───────────────────────────────────────────────────
+        _vid_style_choice = st.radio(
+            UI_MEDIA_STYLE_LABEL,
+            [UI_MEDIA_STYLE_REALISTIC, UI_MEDIA_STYLE_ANIMATION],
+            horizontal=True,
+            key=_vid_style_key,
+        )
+        _vid_style_val = "animation" if _vid_style_choice == UI_MEDIA_STYLE_ANIMATION else "realistic"
+
+        # ── Reference images (optional per-section upload) ───────────────────
+        _vid_ref_files = st.file_uploader(
+            UI_MEDIA_REF_IMG_LABEL,
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key=_vid_ref_key,
+            help=UI_MEDIA_REF_IMG_HELP,
+        )
+        _vid_ref_notes = st.session_state.get(_vid_ref_res_key, "")
+        if _vid_ref_files:
+            _ref_bytes = [f.getvalue() for f in _vid_ref_files[:3]]
+            _ref_mime  = [f.type or "image/png" for f in _vid_ref_files[:3]]
+            _ref_sig   = str(sorted(f.name for f in _vid_ref_files))
+            if st.session_state.get(f"media_vid_ref_sig_{qc}") != _ref_sig:
+                with st.spinner(UI_MEDIA_REF_ANALYSING):
+                    from media_generator import analyse_reference_images
+                    _vid_ref_notes = analyse_reference_images(_ref_bytes, _ref_mime)
+                st.session_state[_vid_ref_res_key]          = _vid_ref_notes
+                st.session_state[f"media_vid_ref_sig_{qc}"] = _ref_sig
+            if _vid_ref_notes:
+                st.success(UI_MEDIA_REF_DONE)
 
         st.caption(
             "ℹ️ מודלי ווידאו AI אינם מייצרים סאונד. "
@@ -1599,6 +1676,8 @@ def _render_media_panel(results: dict) -> None:
                         campaign_context=_vid_ctx or "",
                         model_key=_vid_model_val,
                         aspect_ratio=_ar_val,
+                        ref_description=_vid_ref_notes,
+                        style=_vid_style_val,
                         progress_cb=lambda n, total, status: st.write(
                             UI_MEDIA_SCENE_GENERATING.format(n=n)
                         ),
@@ -1616,10 +1695,12 @@ def _render_media_panel(results: dict) -> None:
                 with _status:
                     vid_prompt = generate_video_prompt(
                         _final, _vid_ctx or "", question=_question,
+                        ref_description=_vid_ref_notes,
                     )
                     st.write(UI_MEDIA_STEP_VIDEO)
                     result = generate_video(
                         vid_prompt, model_key=_vid_model_val, aspect_ratio=_ar_val,
+                        style=_vid_style_val,
                     )
                     if result["error"]:
                         _status.update(
