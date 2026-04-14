@@ -1243,3 +1243,276 @@ RELIABILITY_GAUGE_HTML = """\
   <div style="font-size:0.68em;font-weight:600;margin-top:2px;color:{color}">{label}</div>
 </div>\
 """
+
+
+# ---------------------------------------------------------------------------
+# Media Generation — prompt templates
+# ---------------------------------------------------------------------------
+
+PROMPT_MEDIA_IMAGE_BRIEF = """\
+You are a senior creative director with 15+ years of experience creating visual \
+advertising for mobile apps and digital marketing campaigns.
+
+Your task: read the AI council debate answer below and convert its core marketing \
+message into a single, highly optimised DALL-E 3 image-generation prompt.
+
+--- AI Council Final Answer ---
+{final_answer}
+
+--- Additional Campaign Context ---
+{campaign_context}
+
+## Output Rules — follow EXACTLY
+
+1. Output ONLY the image prompt — no preamble, no explanation, no markdown headers.
+2. Write in English (DALL-E 3 performs best in English).
+3. Structure the prompt as: \
+[Shot type & composition] + [Subject / scene] + [Visual style] + [Lighting] + [Mood / atmosphere]
+4. Be cinematic and specific — avoid vague adjectives like "beautiful", "amazing", "stunning".
+5. Length: 2-3 sentences, no more than 160 words.
+6. Do NOT include text, logos, words, UI elements, or watermarks in the scene description.
+7. The image must communicate the product's core value proposition through visual \
+storytelling alone — show the outcome, not the app interface.
+8. For safety / personal-protection apps: show a real person in a relatable dangerous \
+scenario where calm, competence, or rescue is the emotional payoff.
+
+Write the DALL-E 3 prompt now:"""
+
+PROMPT_MEDIA_VIDEO_BRIEF = """\
+You are a senior creative director specialising in 6-second video ads for mobile apps \
+(platforms: Apple Ads, TikTok, Instagram Reels, YouTube Shorts).
+
+Your task: read the AI council debate answer below and convert its core marketing \
+message into a single, highly optimised text-to-video generation prompt \
+(for Minimax Video-01 or Luma Dream Machine).
+
+--- AI Council Final Answer ---
+{final_answer}
+
+--- Additional Campaign Context ---
+{campaign_context}
+
+## Output Rules — follow EXACTLY
+
+1. Output ONLY the video prompt — no preamble, no explanation, no markdown headers.
+2. Write in English.
+3. Describe in this order: (a) opening scene and characters, (b) the key action / moment, \
+(c) camera movement, (d) emotional climax / payoff, (e) lighting and visual tone.
+4. Include explicit motion — what changes from frame 0 to frame 6? Show a mini narrative arc.
+5. Length: 3-5 sentences, no more than 220 words.
+6. No text overlays — describe only what the camera physically sees.
+7. Use real-world relatable scenarios that demonstrate the product value in action \
+(e.g., a person in distress who is saved, a hiker who sends their location, etc.).
+8. Specify camera language: "close-up", "wide establishing shot", "handheld", \
+"slow push-in", "over-the-shoulder", etc.
+9. Specify mood and grade: "golden hour", "blue-hour city lights", "high-contrast thriller grade", etc.
+
+Write the video generation prompt now:"""
+
+# ---------------------------------------------------------------------------
+# Media panel — UI strings (Hebrew, matching the app's language convention)
+# ---------------------------------------------------------------------------
+
+UI_MEDIA_PANEL_HEADER      = "🎬 ייצור מדיה שיווקית"
+UI_MEDIA_PANEL_CAPTION     = "צור תמונות או קליפים מקצועיים המבוססים ישירות על תוצאת הדיון"
+UI_MEDIA_IMAGE_EXPANDER    = "🖼️ צור תמונה שיווקית (DALL-E 3)"
+UI_MEDIA_VIDEO_EXPANDER    = "🎥 צור קליפ שיווקי (AI Video)"
+UI_MEDIA_CONTEXT_LABEL     = "הקשר נוסף לקמפיין (אופציונלי)"
+UI_MEDIA_CONTEXT_HELP      = "לדוגמא: קהל יעד, גיל, ערוץ פרסום, טון רצוי, מדינה..."
+UI_MEDIA_SIZE_LABEL        = "פורמט / יחס גובה-רוחב"
+UI_MEDIA_SIZE_OPTIONS: dict[str, str] = {
+    "Landscape 16:9 — בנר / YouTube / Apple Search Ads": "landscape",
+    "Portrait  9:16 — Stories / Reels / מודעות מובייל":  "portrait",
+    "Square    1:1  — אינסטגרם / טוויטר":               "square",
+}
+UI_MEDIA_VIDEO_MODEL_LABEL = "מודל וידאו"
+UI_MEDIA_GENERATE_IMG_BTN  = "✨ צור תמונה"
+UI_MEDIA_GENERATE_VID_BTN  = "🎬 צור קליפ"
+UI_MEDIA_STEP_PROMPT       = "שלב 1/2 — בונה פרומפט יצירתי עם Claude..."
+UI_MEDIA_STEP_IMAGE        = "שלב 2/2 — מייצר תמונה עם DALL-E 3 (כ-15 שניות)..."
+UI_MEDIA_STEP_VIDEO        = "שלב 2/2 — מייצר קליפ (עד 3 דקות — נא להמתין)..."
+UI_MEDIA_DL_IMG_BTN        = "⬇️ הורד תמונה (PNG)"
+UI_MEDIA_DL_VID_BTN        = "⬇️ הורד קליפ (MP4)"
+UI_MEDIA_PROMPT_USED_HDR   = "הפרומפט שנוצר על-ידי Claude"
+UI_MEDIA_ERROR_PREFIX      = "שגיאה בייצור מדיה"
+UI_MEDIA_NO_REPLICATE_KEY  = (
+    "**⚠️ REPLICATE_API_TOKEN חסר**  \n"
+    "הירשם בחינם בכתובת **replicate.com**, קבל API token "
+    "והוסף שורה `REPLICATE_API_TOKEN=your_token` לקובץ `.env`."
+)
+UI_MEDIA_REGEN_BTN         = "🔄 צור שוב"
+
+# ---------------------------------------------------------------------------
+# Cultural Campaign Generator — market profiles and UI strings
+# ---------------------------------------------------------------------------
+
+# Each profile gives Claude the cultural intelligence it needs to generate
+# visually and tonally appropriate media for that specific market.
+CULTURAL_PROFILES: dict[str, dict] = {
+    "🇩🇪 גרמניה": {
+        "key":      "germany",
+        "language": "German",
+        "flag":     "🇩🇪",
+        "brief": (
+            "German market: tone is direct, rational, and fact-based — avoid hype or "
+            "exaggerated claims. Visuals should feel clean, precise, and trustworthy. "
+            "Show real, relatable everyday scenarios with natural lighting. People should "
+            "appear confident and self-sufficient, not dramatic. Privacy and data-security "
+            "themes resonate strongly. Color palette: cool whites, greys, muted blues. "
+            "Avoid flashy or oversaturated imagery. Architecture and environments should "
+            "feel Northern European (urban, modern, functional). Women are shown as "
+            "independent and professional."
+        ),
+    },
+    "🇧🇷 ברזיל": {
+        "key":      "brazil",
+        "language": "Portuguese (Brazilian)",
+        "flag":     "🇧🇷",
+        "brief": (
+            "Brazilian market: tone is warm, energetic, and community-oriented. Visuals "
+            "should feel vibrant and joyful with rich, saturated colors — yellows, greens, "
+            "warm oranges. Show diverse, mixed-ethnicity characters in social or family "
+            "settings. Outdoor scenes and natural light work well. Emotional storytelling "
+            "and human connection are central — smiles, touch, togetherness. Settings: "
+            "modern urban Brazil, beaches, colourful neighbourhoods. Women are shown as "
+            "confident, expressive, and social. Avoid anything that feels cold or overly "
+            "clinical."
+        ),
+    },
+    "🇸🇦 עולם הערבי": {
+        "key":      "arabic",
+        "language": "Arabic",
+        "flag":     "🇸🇦",
+        "brief": (
+            "Arab / Middle Eastern market: visuals must be culturally sensitive and modest. "
+            "Women should be shown with appropriate clothing — hijab or modest dress is "
+            "expected in many markets (Gulf, Egypt, Levant). Family values and privacy are "
+            "paramount. Tone is warm and respectful, never confrontational. Settings: "
+            "modern Middle Eastern interiors, family homes, tasteful urban environments. "
+            "Color palette: warm golds, deep teals, cream whites — rich but elegant. "
+            "Avoid any imagery of bare skin, revealing clothing, or alcohol. Emphasise "
+            "safety, family protection, and community trust."
+        ),
+    },
+    "🇮🇱 ישראל": {
+        "key":      "israel",
+        "language": "Hebrew",
+        "flag":     "🇮🇱",
+        "brief": (
+            "Israeli market: tone is direct, informal, and no-nonsense — Israelis distrust "
+            "corporate polish. Visuals should feel authentic and relatable, showing real "
+            "people in everyday Israeli settings (Tel Aviv streets, outdoor cafes, "
+            "Mediterranean light). Diverse representation (Jewish and Arab Israelis). "
+            "Women are shown as independent and assertive. Humour and self-awareness work "
+            "well. Color palette: Mediterranean — warm whites, terracotta, deep blue. "
+            "Tech-savvy audience — can show app UI elements subtly."
+        ),
+    },
+    "🇺🇸 ארצות הברית": {
+        "key":      "usa",
+        "language": "English (American)",
+        "flag":     "🇺🇸",
+        "brief": (
+            "US market: tone is empowering, aspirational, and inclusive. Show diverse "
+            "representation across ethnicities, body types, and backgrounds. Visuals are "
+            "polished but authentic — avoid stock-photo feel. Settings: modern American "
+            "urban and suburban environments. Women are shown as strong, independent, and "
+            "in control. Color palette: clean, bright, high-contrast. Emotional storytelling "
+            "with a clear hero moment. Safety and personal empowerment themes resonate "
+            "strongly."
+        ),
+    },
+    "🇯🇵 יפן": {
+        "key":      "japan",
+        "language": "Japanese",
+        "flag":     "🇯🇵",
+        "brief": (
+            "Japanese market: tone is subtle, precise, and aesthetically refined. Visuals "
+            "should feel clean and minimalist — lots of negative space, soft natural light, "
+            "delicate color palettes (blush pinks, soft greens, off-whites). Avoid direct "
+            "confrontation or dramatic emotion; show calm competence and quiet confidence. "
+            "Settings: modern Japanese interiors, zen gardens, clean urban spaces. "
+            "Attention to small details matters — precision and quality signal trust. "
+            "Women are shown as capable and graceful."
+        ),
+    },
+    "🇮🇳 הודו": {
+        "key":      "india",
+        "language": "Hindi / English",
+        "flag":     "🇮🇳",
+        "brief": (
+            "Indian market: tone is warm, family-oriented, and aspirational. Show diverse "
+            "ethnic representation — India is highly regional. Vibrant colors work well "
+            "(saffron, deep red, turquoise). Settings: modern Indian urban environments, "
+            "family homes, mix of traditional and contemporary elements. Women are shown "
+            "as empowered within family and social contexts. Safety and protection themes "
+            "resonate strongly. Modest clothing is appropriate for broader market appeal. "
+            "Avoid anything that could be seen as culturally insensitive to religious or "
+            "regional groups."
+        ),
+    },
+    "🇫🇷 צרפת": {
+        "key":      "france",
+        "language": "French",
+        "flag":     "🇫🇷",
+        "brief": (
+            "French market: tone is elegant, understated, and intellectually confident — "
+            "avoid over-selling or American-style hype. Visuals should feel chic and "
+            "effortlessly stylish. Settings: Parisian streets, modern French interiors, "
+            "cafes, natural light. Women are shown as sophisticated, independent, and "
+            "self-assured. Color palette: muted elegance — navy, cream, burgundy, soft "
+            "grey. Privacy and personal autonomy resonate strongly. Quality over quantity "
+            "messaging works well."
+        ),
+    },
+}
+
+PROMPT_MEDIA_CULTURAL_BRIEF = """\
+You are a senior creative director with deep cross-cultural advertising expertise.
+
+Your task: generate a highly optimised {media_type} prompt for the {market} market, \
+based on the AI council's final answer below.
+
+--- AI Council Final Answer ---
+{final_answer}
+
+--- Additional Campaign Context ---
+{campaign_context}
+
+--- Cultural Profile for {market} ---
+{cultural_brief}
+
+## Output Rules — follow EXACTLY
+
+1. Output ONLY the {media_type} prompt — no preamble, no explanation.
+2. Write in English (generation models work best in English regardless of target market).
+3. Apply the cultural profile above to every element: setting, characters, clothing, \
+   color palette, lighting, and emotional tone.
+4. For images: [Shot type] + [Scene] + [Visual style] + [Lighting] + [Cultural mood]. \
+   2-3 sentences, max 160 words. No text/logos in scene.
+5. For videos: [Opening scene] + [Character action] + [Camera movement] + \
+   [Emotional payoff] + [Visual grade]. 3-5 sentences, max 220 words. Show motion arc.
+6. The output must feel like it was produced *for* that culture, not just translated.
+7. For safety/health apps: show a scenario that resonates specifically with this culture's \
+   relationship to personal safety, family protection, or women's health.
+
+Write the {media_type} prompt now:"""
+
+# Cultural panel UI strings
+UI_CULTURAL_EXPANDER        = "🌍 קמפיין מותאם תרבותית — מספר שווקים במקביל"
+UI_CULTURAL_CAPTION         = "בחר שווקי יעד וצור תמונה או קליפ מותאם תרבותית לכל אחד"
+UI_CULTURAL_MARKET_SELECT   = "בחר שווקי יעד (ניתן לבחור מספר)"
+UI_CULTURAL_MEDIA_TYPE      = "סוג מדיה"
+UI_CULTURAL_MEDIA_IMAGE     = "תמונה (DALL-E 3)"
+UI_CULTURAL_MEDIA_VIDEO     = "קליפ (Replicate)"
+UI_CULTURAL_SIZE_LABEL      = "פורמט"
+UI_CULTURAL_CTX_LABEL       = "הקשר קמפיין (אופציונלי — חל על כל השווקים)"
+UI_CULTURAL_CTX_PLACEHOLDER = "לדוגמא: אפליקציית מעקב מחזור ובריאות האישה, גיל 20-40..."
+UI_CULTURAL_GENERATE_BTN    = "✨ צור לכל השווקים הנבחרים"
+UI_CULTURAL_GENERATING      = "מייצר מדיה מותאמת תרבותית..."
+UI_CULTURAL_RESULT_HDR      = "תוצאות לפי שוק"
+UI_CULTURAL_DL_IMG          = "⬇️ הורד PNG"
+UI_CULTURAL_DL_VID          = "⬇️ הורד MP4"
+UI_CULTURAL_PROMPT_HDR      = "פרומפט"
+UI_CULTURAL_MIN_MARKETS     = "בחר לפחות שוק אחד"
+UI_CULTURAL_NO_VIDEO_KEY    = "ייצור קליפים מושבת — הוסף REPLICATE_API_TOKEN ל-.env"

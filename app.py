@@ -125,6 +125,44 @@ from glossary import (
     UI_STAGE3B_ROUND2_LABEL,
     UI_STAGE3B_EXPANDER_MODEL,
     UI_STAGE3B_NO_DEBATES,
+    UI_MEDIA_PANEL_HEADER,
+    UI_MEDIA_PANEL_CAPTION,
+    UI_MEDIA_IMAGE_EXPANDER,
+    UI_MEDIA_VIDEO_EXPANDER,
+    UI_MEDIA_CONTEXT_LABEL,
+    UI_MEDIA_CONTEXT_HELP,
+    UI_MEDIA_SIZE_LABEL,
+    UI_MEDIA_SIZE_OPTIONS,
+    UI_MEDIA_VIDEO_MODEL_LABEL,
+    UI_MEDIA_GENERATE_IMG_BTN,
+    UI_MEDIA_GENERATE_VID_BTN,
+    UI_MEDIA_STEP_PROMPT,
+    UI_MEDIA_STEP_IMAGE,
+    UI_MEDIA_STEP_VIDEO,
+    UI_MEDIA_DL_IMG_BTN,
+    UI_MEDIA_DL_VID_BTN,
+    UI_MEDIA_PROMPT_USED_HDR,
+    UI_MEDIA_ERROR_PREFIX,
+    UI_MEDIA_NO_REPLICATE_KEY,
+    UI_MEDIA_REGEN_BTN,
+    CULTURAL_PROFILES,
+    UI_CULTURAL_EXPANDER,
+    UI_CULTURAL_CAPTION,
+    UI_CULTURAL_MARKET_SELECT,
+    UI_CULTURAL_MEDIA_TYPE,
+    UI_CULTURAL_MEDIA_IMAGE,
+    UI_CULTURAL_MEDIA_VIDEO,
+    UI_CULTURAL_SIZE_LABEL,
+    UI_CULTURAL_CTX_LABEL,
+    UI_CULTURAL_CTX_PLACEHOLDER,
+    UI_CULTURAL_GENERATE_BTN,
+    UI_CULTURAL_GENERATING,
+    UI_CULTURAL_RESULT_HDR,
+    UI_CULTURAL_DL_IMG,
+    UI_CULTURAL_DL_VID,
+    UI_CULTURAL_PROMPT_HDR,
+    UI_CULTURAL_MIN_MARKETS,
+    UI_CULTURAL_NO_VIDEO_KEY,
     CODE_REVIEW_DEFAULT_QUESTION,
     UI_CODE_REVIEW_TOGGLE,
     UI_CODE_REVIEW_PATH_LABEL,
@@ -1164,6 +1202,374 @@ def _render_citation_cards(citations: list[dict]) -> None:
                 )
 
 
+def _render_media_panel(results: dict) -> None:
+    """
+    Render the AI media-generation panel below the debate results.
+
+    The panel contains two collapsible sections:
+      1. Image generation  — DALL-E 3 via existing OPENAI_API_KEY
+      2. Video generation  — Replicate (needs REPLICATE_API_TOKEN in .env)
+
+    Claude converts the council's final_answer into an optimised creative
+    brief before each generation call, so the output is always grounded in
+    the debate conclusions.
+
+    Generated assets are cached in st.session_state so they survive Streamlit
+    reruns without triggering extra API calls.
+    """
+    from media_generator import (
+        generate_image_prompt,
+        generate_video_prompt,
+        generate_image,
+        generate_video,
+        VIDEO_MODELS,
+    )
+
+    _final = results.get("final_answer", "")
+    if not _final or _final.startswith("ERROR:"):
+        return
+
+    # Use the query counter so session keys are unique per debate session
+    qc = st.session_state._query_counter
+
+    st.subheader(UI_MEDIA_PANEL_HEADER)
+    st.caption(UI_MEDIA_PANEL_CAPTION)
+
+    # ── Section 1: Image generation ──────────────────────────────────────────
+    with st.expander(UI_MEDIA_IMAGE_EXPANDER, expanded=False):
+
+        _img_ctx_key  = f"media_img_ctx_{qc}"
+        _img_size_key = f"media_img_size_{qc}"
+        _img_res_key  = f"media_img_result_{qc}"
+        _img_n_key    = f"media_img_n_{qc}"
+
+        col_ctx, col_size = st.columns([3, 2])
+        with col_ctx:
+            _img_ctx = st.text_area(
+                UI_MEDIA_CONTEXT_LABEL,
+                placeholder=(
+                    "לדוגמא: קהל יעד נשים 20-35, אפליקציית ביטחון אישי, "
+                    "לאינסטגרם, טון אמפתי ומעצים..."
+                ),
+                height=90,
+                key=_img_ctx_key,
+                help=UI_MEDIA_CONTEXT_HELP,
+            )
+        with col_size:
+            _size_label = st.selectbox(
+                UI_MEDIA_SIZE_LABEL,
+                list(UI_MEDIA_SIZE_OPTIONS.keys()),
+                key=_img_size_key,
+            )
+            _size_val = UI_MEDIA_SIZE_OPTIONS[_size_label]
+
+        # Display cached image (if any) above the generate button
+        _cached_img = st.session_state.get(_img_res_key)
+        if _cached_img:
+            st.image(_cached_img["bytes"], use_container_width=True)
+            with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                st.code(_cached_img["prompt"], language=None)
+            dl_col, regen_col = st.columns(2)
+            with dl_col:
+                st.download_button(
+                    UI_MEDIA_DL_IMG_BTN,
+                    data=_cached_img["bytes"],
+                    file_name="ai_council_marketing.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key=f"dl_img_{qc}_{_cached_img['gen_n']}",
+                )
+            with regen_col:
+                if st.button(
+                    UI_MEDIA_REGEN_BTN,
+                    use_container_width=True,
+                    key=f"regen_img_{qc}_{_cached_img['gen_n']}",
+                ):
+                    del st.session_state[_img_res_key]
+                    st.rerun()
+
+        if st.button(
+            UI_MEDIA_GENERATE_IMG_BTN,
+            type="primary",
+            use_container_width=True,
+            key=f"gen_img_btn_{qc}",
+        ):
+            _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
+            with _status:
+                img_prompt = generate_image_prompt(_final, _img_ctx or "")
+                st.write(UI_MEDIA_STEP_IMAGE)
+                result = generate_image(img_prompt, size=_size_val)
+                if result["error"]:
+                    _status.update(
+                        label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
+                        state="error",
+                        expanded=True,
+                    )
+                    st.error(result["error"])
+                else:
+                    _status.update(label="הושלם!", state="complete", expanded=False)
+                    _n = st.session_state.get(_img_n_key, 0) + 1
+                    st.session_state[_img_n_key] = _n
+                    st.session_state[_img_res_key] = {
+                        "bytes":  result["bytes"],
+                        "prompt": result["prompt_used"],
+                        "gen_n":  _n,
+                    }
+                    st.rerun()
+
+    # ── Section 2: Video generation ──────────────────────────────────────────
+    with st.expander(UI_MEDIA_VIDEO_EXPANDER, expanded=False):
+
+        _vid_ctx_key   = f"media_vid_ctx_{qc}"
+        _vid_model_key = f"media_vid_model_{qc}"
+        _vid_ar_key    = f"media_vid_ar_{qc}"
+        _vid_res_key   = f"media_vid_result_{qc}"
+        _vid_n_key     = f"media_vid_n_{qc}"
+
+        _replicate_ok = bool(os.environ.get("REPLICATE_API_TOKEN"))
+        if not _replicate_ok:
+            st.warning(UI_MEDIA_NO_REPLICATE_KEY)
+
+        _vid_ctx = st.text_area(
+            UI_MEDIA_CONTEXT_LABEL,
+            placeholder=(
+                "לדוגמא: בחורה צעירה בדייט, מרגישה לא בנוח, אומרת את מילת הקוד שלה "
+                "בשקט ואיש קשר בא לעזרתה..."
+            ),
+            height=90,
+            key=_vid_ctx_key,
+            help=UI_MEDIA_CONTEXT_HELP,
+        )
+
+        col_model, col_ar = st.columns(2)
+        with col_model:
+            _vid_model_options = {cfg["label"]: key for key, cfg in VIDEO_MODELS.items()}
+            _vid_model_label = st.selectbox(
+                UI_MEDIA_VIDEO_MODEL_LABEL,
+                list(_vid_model_options.keys()),
+                key=_vid_model_key,
+            )
+            _vid_model_val = _vid_model_options[_vid_model_label]
+        with col_ar:
+            _ar_label = st.selectbox(
+                UI_MEDIA_SIZE_LABEL,
+                list(UI_MEDIA_SIZE_OPTIONS.keys()),
+                key=_vid_ar_key,
+            )
+            _ar_val = UI_MEDIA_SIZE_OPTIONS[_ar_label]
+
+        # Display cached video (if any) above the generate button
+        _cached_vid = st.session_state.get(_vid_res_key)
+        if _cached_vid and _cached_vid.get("bytes"):
+            st.video(_cached_vid["bytes"])
+            with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                st.code(_cached_vid["prompt"], language=None)
+            dl_col, regen_col = st.columns(2)
+            with dl_col:
+                st.download_button(
+                    UI_MEDIA_DL_VID_BTN,
+                    data=_cached_vid["bytes"],
+                    file_name="ai_council_campaign.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    key=f"dl_vid_{qc}_{_cached_vid['gen_n']}",
+                )
+            with regen_col:
+                if st.button(
+                    UI_MEDIA_REGEN_BTN,
+                    use_container_width=True,
+                    key=f"regen_vid_{qc}_{_cached_vid['gen_n']}",
+                ):
+                    del st.session_state[_vid_res_key]
+                    st.rerun()
+
+        if st.button(
+            UI_MEDIA_GENERATE_VID_BTN,
+            type="primary",
+            use_container_width=True,
+            disabled=not _replicate_ok,
+            key=f"gen_vid_btn_{qc}",
+        ):
+            _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
+            with _status:
+                vid_prompt = generate_video_prompt(_final, _vid_ctx or "")
+                st.write(UI_MEDIA_STEP_VIDEO)
+                result = generate_video(
+                    vid_prompt,
+                    model_key=_vid_model_val,
+                    aspect_ratio=_ar_val,
+                )
+                if result["error"]:
+                    _status.update(
+                        label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
+                        state="error",
+                        expanded=True,
+                    )
+                    st.error(result["error"])
+                else:
+                    _status.update(label="הושלם!", state="complete", expanded=False)
+                    _n = st.session_state.get(_vid_n_key, 0) + 1
+                    st.session_state[_vid_n_key] = _n
+                    st.session_state[_vid_res_key] = {
+                        "bytes":  result["bytes"],
+                        "url":    result["url"],
+                        "prompt": result["prompt_used"],
+                        "gen_n":  _n,
+                    }
+                    st.rerun()
+
+
+def _render_cultural_panel(results: dict) -> None:
+    """
+    Cultural Campaign Generator — creates culturally-adapted images or video
+    clips for multiple markets in parallel, each grounded in the council's
+    final answer and tailored to local visual norms and sensitivities.
+    """
+    from media_generator import generate_cultural_variants, VIDEO_MODELS
+
+    _final = results.get("final_answer", "")
+    if not _final or _final.startswith("ERROR:"):
+        return
+
+    qc = st.session_state._query_counter
+
+    with st.expander(UI_CULTURAL_EXPANDER, expanded=False):
+        st.caption(UI_CULTURAL_CAPTION)
+
+        # ── Controls row ─────────────────────────────────────────────────────
+        col_left, col_right = st.columns([2, 1])
+        with col_left:
+            _selected_markets = st.multiselect(
+                UI_CULTURAL_MARKET_SELECT,
+                options=list(CULTURAL_PROFILES.keys()),
+                default=[],
+                key=f"cultural_markets_{qc}",
+            )
+        with col_right:
+            _media_type_label = st.radio(
+                UI_CULTURAL_MEDIA_TYPE,
+                [UI_CULTURAL_MEDIA_IMAGE, UI_CULTURAL_MEDIA_VIDEO],
+                key=f"cultural_media_type_{qc}",
+            )
+            _media_type = "image" if _media_type_label == UI_CULTURAL_MEDIA_IMAGE else "video"
+
+        col_size, col_vid_model = st.columns(2)
+        with col_size:
+            _size_label = st.selectbox(
+                UI_CULTURAL_SIZE_LABEL,
+                list(UI_MEDIA_SIZE_OPTIONS.keys()),
+                key=f"cultural_size_{qc}",
+            )
+            _size_val = UI_MEDIA_SIZE_OPTIONS[_size_label]
+        with col_vid_model:
+            if _media_type == "video":
+                _vid_model_options = {cfg["label"]: key for key, cfg in VIDEO_MODELS.items()}
+                _vid_model_label = st.selectbox(
+                    UI_MEDIA_VIDEO_MODEL_LABEL,
+                    list(_vid_model_options.keys()),
+                    key=f"cultural_vid_model_{qc}",
+                )
+                _vid_model_val = _vid_model_options[_vid_model_label]
+            else:
+                _vid_model_val = "minimax"
+
+        _campaign_ctx = st.text_area(
+            UI_CULTURAL_CTX_LABEL,
+            placeholder=UI_CULTURAL_CTX_PLACEHOLDER,
+            height=80,
+            key=f"cultural_ctx_{qc}",
+        )
+
+        _replicate_ok = bool(os.environ.get("REPLICATE_API_TOKEN"))
+        if _media_type == "video" and not _replicate_ok:
+            st.warning(UI_CULTURAL_NO_VIDEO_KEY)
+
+        _can_generate = (
+            len(_selected_markets) >= 1
+            and (_media_type == "image" or _replicate_ok)
+        )
+
+        if not _selected_markets:
+            st.caption(f"_{UI_CULTURAL_MIN_MARKETS}_")
+
+        if st.button(
+            UI_CULTURAL_GENERATE_BTN,
+            type="primary",
+            use_container_width=True,
+            disabled=not _can_generate,
+            key=f"cultural_gen_btn_{qc}",
+        ):
+            _status = st.status(UI_CULTURAL_GENERATING, expanded=True)
+            with _status:
+                for mkt in _selected_markets:
+                    flag = CULTURAL_PROFILES[mkt].get("flag", "")
+                    st.write(f"{flag} {mkt}...")
+
+                variants = generate_cultural_variants(
+                    final_answer=_final,
+                    selected_markets=_selected_markets,
+                    media_type=_media_type,
+                    size=_size_val,
+                    campaign_context=_campaign_ctx or "",
+                    video_model_key=_vid_model_val,
+                )
+                _status.update(label="הושלם!", state="complete", expanded=False)
+
+            # Cache results in session state
+            _n = st.session_state.get(f"cultural_n_{qc}", 0) + 1
+            st.session_state[f"cultural_n_{qc}"]       = _n
+            st.session_state[f"cultural_results_{qc}_{_n}"] = variants
+            st.rerun()
+
+        # ── Display cached results ────────────────────────────────────────────
+        _gen_n = st.session_state.get(f"cultural_n_{qc}", 0)
+        _cached_variants = st.session_state.get(f"cultural_results_{qc}_{_gen_n}", [])
+
+        if _cached_variants:
+            st.markdown(f"### {UI_CULTURAL_RESULT_HDR}")
+            # Show results in a responsive grid (max 2 columns)
+            _cols_per_row = min(len(_cached_variants), 2)
+            for i in range(0, len(_cached_variants), _cols_per_row):
+                row_variants = _cached_variants[i : i + _cols_per_row]
+                cols = st.columns(len(row_variants))
+                for col, variant in zip(cols, row_variants):
+                    with col:
+                        _mkt   = variant["market"]
+                        _flag  = variant.get("flag", "")
+                        _err   = variant.get("error")
+                        _bytes = variant.get("bytes")
+                        _prom  = variant.get("prompt_used", "")
+
+                        st.markdown(f"**{_flag} {_mkt}**")
+
+                        if _err:
+                            st.error(f"{UI_MEDIA_ERROR_PREFIX}: {_err}")
+                        elif _bytes:
+                            if _media_type == "image":
+                                st.image(_bytes, use_container_width=True)
+                                st.download_button(
+                                    UI_CULTURAL_DL_IMG,
+                                    data=_bytes,
+                                    file_name=f"campaign_{CULTURAL_PROFILES.get(_mkt, {}).get('key', 'market')}.png",
+                                    mime="image/png",
+                                    use_container_width=True,
+                                    key=f"dl_cultural_img_{qc}_{_gen_n}_{_mkt}",
+                                )
+                            else:
+                                st.video(_bytes)
+                                st.download_button(
+                                    UI_CULTURAL_DL_VID,
+                                    data=_bytes,
+                                    file_name=f"campaign_{CULTURAL_PROFILES.get(_mkt, {}).get('key', 'market')}.mp4",
+                                    mime="video/mp4",
+                                    use_container_width=True,
+                                    key=f"dl_cultural_vid_{qc}_{_gen_n}_{_mkt}",
+                                )
+                        if _prom:
+                            with st.expander(UI_CULTURAL_PROMPT_HDR, expanded=False):
+                                st.code(_prom, language=None)
+
+
 def _display_results(results: dict) -> None:
     """
     Render the complete results view from a results dict.
@@ -1635,6 +2041,11 @@ if start_button or _fup_question is not None:
 # ---------------------------------------------------------------------------
 if st.session_state.current_results:
     _display_results(st.session_state.current_results)
+
+    # ── Media generation panel ─────────────────────────────────────────────
+    st.divider()
+    _render_media_panel(st.session_state.current_results)
+    _render_cultural_panel(st.session_state.current_results)
 
     # ── Follow-up question panel ───────────────────────────────────────────
     st.divider()

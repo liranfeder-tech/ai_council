@@ -28,3 +28,6 @@ streamlit-javascript>=0.0.3
 
 # ── Cloud Sync (Firestore) ────────────────────────────────────────────────
 firebase-admin>=6.2.0
+
+# Media generation (images via DALL-E 3, videos via Replicate)
+replicate>=0.34.0
