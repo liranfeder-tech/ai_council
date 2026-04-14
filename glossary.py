@@ -37,7 +37,7 @@ FALLBACK_MODEL_ID  = "gemini-3-pro-preview"   # human-readable reference / loggi
 #                   "xai"       → XAI_API_KEY
 #   color       – hex colour for the card / expander accent
 # ---------------------------------------------------------------------------
-MODELS: dict[str, dict] = {
+MODELS = {
     "claude": {
         "id":       "claude-sonnet-4-6",
         "label":    "Claude (Anthropic)",
@@ -1375,7 +1375,7 @@ UI_MEDIA_VIDEO_EXPANDER    = "🎥 צור קליפ שיווקי (AI Video)"
 UI_MEDIA_CONTEXT_LABEL     = "הקשר נוסף לקמפיין (אופציונלי)"
 UI_MEDIA_CONTEXT_HELP      = "לדוגמא: קהל יעד, גיל, ערוץ פרסום, טון רצוי, מדינה..."
 UI_MEDIA_SIZE_LABEL        = "פורמט / יחס גובה-רוחב"
-UI_MEDIA_SIZE_OPTIONS: dict[str, str] = {
+UI_MEDIA_SIZE_OPTIONS = {
     "Landscape 16:9 — בנר / YouTube / Apple Search Ads": "landscape",
     "Portrait  9:16 — Stories / Reels / מודעות מובייל":  "portrait",
     "Square    1:1  — אינסטגרם / טוויטר":               "square",
@@ -1410,7 +1410,7 @@ UI_MEDIA_STEP_STORYBOARD   = "שלב 1/2 — בונה תסריט 3 סצינות 
 
 # Each profile gives Claude the cultural intelligence it needs to generate
 # visually and tonally appropriate media for that specific market.
-CULTURAL_PROFILES: dict[str, dict] = {
+CULTURAL_PROFILES = {
     "🇩🇪 גרמניה": {
         "key":      "germany",
         "language": "German",
