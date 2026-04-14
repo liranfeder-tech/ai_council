@@ -125,6 +125,7 @@ def generate_video_prompt(
     final_answer: str,
     campaign_context: str = "",
     question: str = "",
+    sanitise: bool = True,
 ) -> str:
     """
     Ask the council's master model to distil the debate answer into a
@@ -140,8 +141,8 @@ def generate_video_prompt(
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
     )
-    result = call_model("claude", brief)
-    return result.strip().strip("`").strip()
+    result = call_model("claude", brief).strip().strip("`").strip()
+    return _sanitise_video_prompt(result) if sanitise else result
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +430,35 @@ def generate_cultural_variants(
 # Storyboard — 3 sequential clips that together tell a complete story
 # ---------------------------------------------------------------------------
 
+def _sanitise_video_prompt(prompt: str, max_words: int = 50) -> str:
+    """
+    Enforce the 50-word hard limit and strip phrases that confuse video models.
+    Called on every prompt before it is sent to the generation API.
+    """
+    # Strip forbidden multi-step / editing language
+    import re
+    forbidden = [
+        r"\bcut to\b", r"\bthen\b", r"\bnext\b", r"\bmeanwhile\b",
+        r"\bphone (screen|display)s?\b", r"\bscreen shows?\b",
+        r"\bnotification appears?\b", r"\bmessage (pops|appears|is sent)\b",
+        r"the entire sequence", r"no dramatic music", r"implied",
+    ]
+    for pat in forbidden:
+        prompt = re.sub(pat, "", prompt, flags=re.IGNORECASE)
+
+    # Truncate to max_words, breaking at a sentence boundary if possible
+    words = prompt.split()
+    if len(words) > max_words:
+        truncated = " ".join(words[:max_words])
+        # Try to end at the last full sentence
+        last_dot = max(truncated.rfind("."), truncated.rfind(","))
+        if last_dot > len(truncated) // 2:
+            truncated = truncated[: last_dot + 1]
+        prompt = truncated.strip()
+
+    return prompt
+
+
 def _parse_storyboard_json(raw: str) -> list[dict]:
     """
     Parse Claude's JSON storyboard output.
@@ -532,6 +562,8 @@ def generate_video_storyboard(
             })
             continue
 
+        # Enforce hard word-limit before sending to the video API
+        prompt = _sanitise_video_prompt(prompt, max_words=45)
         clip = generate_video(prompt, model_key=model_key, aspect_ratio=aspect_ratio)
 
         if progress_cb:

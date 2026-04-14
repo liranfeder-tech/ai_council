@@ -1353,7 +1353,7 @@ def _render_media_panel(results: dict) -> None:
         with col_mode:
             _vid_mode = st.radio(
                 UI_MEDIA_VIDEO_MODE_LABEL,
-                [UI_MEDIA_VIDEO_MODE_SINGLE, UI_MEDIA_VIDEO_MODE_STORY],
+                [UI_MEDIA_VIDEO_MODE_STORY, UI_MEDIA_VIDEO_MODE_SINGLE],
                 key=_vid_mode_key,
             )
             _storyboard_mode = (_vid_mode == UI_MEDIA_VIDEO_MODE_STORY)
@@ -1373,9 +1373,13 @@ def _render_media_panel(results: dict) -> None:
             )
             _ar_val = UI_MEDIA_SIZE_OPTIONS[_ar_label]
 
+        st.caption(
+            "ℹ️ מודלי ווידאו AI אינם מייצרים סאונד. "
+            "כל קליפ הוא סצינה אחת רציפה ללא קאטים."
+        )
         if _storyboard_mode:
             st.caption(
-                "Claude יכתוב תסריט 3 סצינות, כל אחת ממוקדת בפעולה אחת בלבד. "
+                "Claude יכתוב תסריט 3 סצינות עצמאיות (45 מילים לכל אחת). "
                 "הקליפים יוצרו ברצף — **משך כולל: ~15-18 שניות.**"
             )
 

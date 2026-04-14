@@ -1313,56 +1313,52 @@ used in a specific, realistic scenario — nothing more.
 5. Lighting + colour grade that matches the emotional tone (thriller blue, warm golden hour, etc.)
 6. Length: 3-4 sentences, max 180 words
 
-### STRUCTURE TO FOLLOW:
-[WHO + WHERE + WHAT they are doing] → [THE PRODUCT MOMENT — exact action] → \
-[IMMEDIATE VISIBLE RESULT] + [CAMERA] + [LIGHTING/GRADE]
+### STRUCTURE — follow exactly:
+[shot size] + [character + appearance] + [environment] + [ONE physical action in progress] + [camera] + [lighting]
 
-Write the video prompt now — one paragraph, no headers, English only:"""
+### HARD LIMITS:
+- Max 50 words total
+- Write as a slightly-animated photograph, not a film synopsis
+- FORBIDDEN: "then", "cut to", "next", "screen shows", "notification", \
+  "message appears", multiple timeframes, references to sound or music
+
+Write the prompt now — one short paragraph, English only:"""
 
 PROMPT_MEDIA_VIDEO_STORYBOARD = """\
-You are a senior creative director writing a 3-scene video storyboard for an ultra-short \
-mobile app ad (each scene is exactly 5-6 seconds, designed for AI video generation).
+You are writing shot descriptions for an AI text-to-video model.
 
-CRITICAL CONSTRAINT — AI video models can only render:
-- ONE character performing ONE simple physical action
-- A simple, static or gently-moving background
-- Basic camera movement (slow push-in, handheld drift, slight tilt)
-They CANNOT render: complex narrative, multiple cuts within a clip, text on screen, \
-phone UI, lip-sync dialogue, or anything requiring editing.
+HARD TECHNICAL LIMITS — the model generates ONE continuous 5-6 second shot per scene:
+- CANNOT do: camera cuts, multiple time steps, phone/screen text, UI elements, \
+  sound, inner monologue, "then X happens", "cut to", "next we see"
+- CAN do: one person making one simple movement, a face changing expression, \
+  an object in gentle motion, slow camera drift
+- Each shot = a single physical action completable in 3-5 seconds
 
---- Product Description ---
+--- Product ---
 {question}
 
---- AI Council Key Insights ---
-{final_answer}
-
---- Additional Campaign Context ---
+--- Campaign Context ---
 {campaign_context}
 
-## Your task: write a 3-scene storyboard as a JSON array.
+Write 3 shot descriptions that together tell this story arc:
+  Scene 1 — PROBLEM: the character in the difficult situation (no product yet)
+  Scene 2 — ACTIVATION: the single physical gesture of using the product
+  Scene 3 — RESOLUTION: someone reacts to receiving the alert
 
-Each scene object must have EXACTLY these keys:
-  "scene_number": integer 1, 2, or 3
-  "title": short Hebrew label shown to the user (e.g. "סצינה 1 — המצוקה")
-  "prompt": the AI video generation prompt in English — ONE simple visual moment:
-            [SHOT TYPE] + [CHARACTER description] + [SINGLE PHYSICAL ACTION] + \
-            [VISIBLE ENVIRONMENT detail] + [CAMERA MOVEMENT] + [LIGHTING/GRADE]
-            Max 80 words. No narrative. No dialogue description. No phone screens.
-            Describe only what the camera physically sees.
+RULES FOR EACH PROMPT — violating any rule ruins the output:
+1. HARD LIMIT: 45 words maximum per prompt. Count them.
+2. Format: [shot size] + [character + clothing] + [environment] + [ONE action happening NOW] + [camera] + [lighting]
+3. Write as if describing a single photograph that is slightly animated
+4. FORBIDDEN words: "then", "cut", "next", "screen shows", "phone displays", \
+   "message", "notification appears", "meanwhile", "as he/she", "before/after"
+5. The action must already be in progress — not about to happen
 
-## Story arc to follow:
-- Scene 1 — SETUP: Show the character in a tense/vulnerable situation (NO product yet)
-- Scene 2 — TRIGGER: Show the exact moment of using the product (one specific physical gesture)
-- Scene 3 — PAYOFF: Show the emotional resolution / rescue moment
-
-## Example for a personal safety app:
+Output ONLY a JSON array — no explanation, no markdown, no extra text:
 [
-  {{"scene_number": 1, "title": "סצינה 1 — המצוקה", "prompt": "Extreme close-up of a young woman's face at a dimly lit bar, eyes wide with fear, glancing sideways nervously, shallow depth of field, slow handheld drift, desaturated teal thriller grade."}},
-  {{"scene_number": 2, "title": "סצינה 2 — מילת הקוד", "prompt": "Close-up of woman's lips barely moving as she whispers, chin slightly down, fingers tight around a glass, barely-visible phone in peripheral, slow push-in on face, high-contrast blue shadow grade."}},
-  {{"scene_number": 3, "title": "סצינה 3 — העזרה מגיעה", "prompt": "A man's face lit by phone screen glow in a dark room, expression shifting from calm to urgent alertness as he stands up abruptly, handheld, warm amber light from screen, deep shadow background."}}
-]
-
-Output ONLY valid JSON — no explanation, no markdown fences, no extra text:"""
+  {{"scene_number": 1, "title": "סצינה 1 — <2-3 Hebrew words>", "prompt": "<45 words max>"}},
+  {{"scene_number": 2, "title": "סצינה 2 — <2-3 Hebrew words>", "prompt": "<45 words max>"}},
+  {{"scene_number": 3, "title": "סצינה 3 — <2-3 Hebrew words>", "prompt": "<45 words max>"}}
+]"""
 
 # ---------------------------------------------------------------------------
 # Media panel — UI strings (Hebrew, matching the app's language convention)
