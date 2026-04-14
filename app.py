@@ -152,6 +152,20 @@ from glossary import (
     UI_MEDIA_STORYBOARD_NOTE,
     UI_MEDIA_SCENE_GENERATING,
     UI_MEDIA_STEP_STORYBOARD,
+    UI_MEDIA_IMAGE_MODE_LABEL,
+    UI_MEDIA_IMAGE_MODE_SINGLE,
+    UI_MEDIA_IMAGE_MODE_STORY,
+    UI_MEDIA_IMG_STORY_HDR,
+    UI_MEDIA_IMG_STORY_NOTE,
+    UI_MEDIA_IMG_STORY_COUNT,
+    UI_MEDIA_STEP_IMG_STORY,
+    UI_MEDIA_STEP_IMG_GEN,
+    UI_MEDIA_IMG_REGEN_STORY,
+    UI_MEDIA_DL_IMG_N,
+    UI_MEDIA_BRANDING_LABEL,
+    UI_MEDIA_BRANDING_HELP,
+    UI_MEDIA_BRANDING_ANALYSING,
+    UI_MEDIA_BRANDING_DONE,
     CULTURAL_PROFILES,
     UI_CULTURAL_EXPANDER,
     UI_CULTURAL_CAPTION,
@@ -1212,20 +1226,12 @@ def _render_citation_cards(citations: list[dict]) -> None:
 def _render_media_panel(results: dict) -> None:
     """
     Render the AI media-generation panel below the debate results.
-
-    The panel contains two collapsible sections:
-      1. Image generation  — DALL-E 3 via existing OPENAI_API_KEY
-      2. Video generation  — Replicate (needs REPLICATE_API_TOKEN in .env)
-
-    Claude converts the council's final_answer into an optimised creative
-    brief before each generation call, so the output is always grounded in
-    the debate conclusions.
-
-    Generated assets are cached in st.session_state so they survive Streamlit
-    reruns without triggering extra API calls.
+    Sections: optional branding upload, image (single/storyboard), video.
     """
     from media_generator import (
+        analyse_branding,
         generate_image_prompt,
+        generate_image_storyboard,
         generate_video_prompt,
         generate_image,
         generate_video,
@@ -1236,29 +1242,54 @@ def _render_media_panel(results: dict) -> None:
     if not _final or _final.startswith("ERROR:"):
         return
 
-    # Use the query counter so session keys are unique per debate session
-    qc = st.session_state._query_counter
+    qc       = st.session_state._query_counter
+    _question = results.get("question", "")
 
     st.subheader(UI_MEDIA_PANEL_HEADER)
     st.caption(UI_MEDIA_PANEL_CAPTION)
 
+    # ── Optional branding upload (shared between image and video) ─────────────
+    _branding_key     = f"media_branding_files_{qc}"
+    _branding_res_key = f"media_branding_notes_{qc}"
+
+    _branding_files = st.file_uploader(
+        UI_MEDIA_BRANDING_LABEL,
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key=_branding_key,
+        help=UI_MEDIA_BRANDING_HELP,
+    )
+    _branding_notes = st.session_state.get(_branding_res_key, "")
+
+    if _branding_files:
+        _br_bytes = [f.getvalue() for f in _branding_files[:3]]
+        _br_mime  = [f.type or "image/png" for f in _branding_files[:3]]
+        # Analyse only if not yet done for this set of files
+        _br_sig = str(sorted(f.name for f in _branding_files))
+        if st.session_state.get(f"media_branding_sig_{qc}") != _br_sig:
+            with st.spinner(UI_MEDIA_BRANDING_ANALYSING):
+                _branding_notes = analyse_branding(_br_bytes, _br_mime)
+            st.session_state[_branding_res_key]           = _branding_notes
+            st.session_state[f"media_branding_sig_{qc}"] = _br_sig
+        if _branding_notes:
+            st.success(UI_MEDIA_BRANDING_DONE)
+
     # ── Section 1: Image generation ──────────────────────────────────────────
     with st.expander(UI_MEDIA_IMAGE_EXPANDER, expanded=False):
 
-        _img_ctx_key  = f"media_img_ctx_{qc}"
-        _img_size_key = f"media_img_size_{qc}"
-        _img_res_key  = f"media_img_result_{qc}"
-        _img_n_key    = f"media_img_n_{qc}"
+        _img_ctx_key   = f"media_img_ctx_{qc}"
+        _img_size_key  = f"media_img_size_{qc}"
+        _img_mode_key  = f"media_img_mode_{qc}"
+        _img_count_key = f"media_img_count_{qc}"
+        _img_res_key   = f"media_img_result_{qc}"
+        _img_n_key     = f"media_img_n_{qc}"
 
         col_ctx, col_size = st.columns([3, 2])
         with col_ctx:
             _img_ctx = st.text_area(
                 UI_MEDIA_CONTEXT_LABEL,
-                placeholder=(
-                    "לדוגמא: קהל יעד נשים 20-35, אפליקציית ביטחון אישי, "
-                    "לאינסטגרם, טון אמפתי ומעצים..."
-                ),
-                height=90,
+                placeholder="לדוגמא: אפליקציית ביטחון אישי, קהל יעד נשים 20-35, לאינסטגרם...",
+                height=80,
                 key=_img_ctx_key,
                 help=UI_MEDIA_CONTEXT_HELP,
             )
@@ -1270,59 +1301,132 @@ def _render_media_panel(results: dict) -> None:
             )
             _size_val = UI_MEDIA_SIZE_OPTIONS[_size_label]
 
-        # Display cached image (if any) above the generate button
-        _cached_img = st.session_state.get(_img_res_key)
-        if _cached_img:
-            st.image(_cached_img["bytes"], use_container_width=True)
-            with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
-                st.code(_cached_img["prompt"], language=None)
-            dl_col, regen_col = st.columns(2)
-            with dl_col:
-                st.download_button(
-                    UI_MEDIA_DL_IMG_BTN,
-                    data=_cached_img["bytes"],
-                    file_name="ai_council_marketing.png",
-                    mime="image/png",
-                    use_container_width=True,
-                    key=f"dl_img_{qc}_{_cached_img['gen_n']}",
+        col_mode, col_count = st.columns(2)
+        with col_mode:
+            _img_mode = st.radio(
+                UI_MEDIA_IMAGE_MODE_LABEL,
+                [UI_MEDIA_IMAGE_MODE_STORY, UI_MEDIA_IMAGE_MODE_SINGLE],
+                key=_img_mode_key,
+            )
+            _img_storyboard = (_img_mode == UI_MEDIA_IMAGE_MODE_STORY)
+        with col_count:
+            if _img_storyboard:
+                _n_images = st.radio(
+                    UI_MEDIA_IMG_STORY_COUNT,
+                    [3, 4],
+                    index=1,
+                    horizontal=True,
+                    key=_img_count_key,
                 )
-            with regen_col:
-                if st.button(
-                    UI_MEDIA_REGEN_BTN,
-                    use_container_width=True,
-                    key=f"regen_img_{qc}_{_cached_img['gen_n']}",
-                ):
+            else:
+                _n_images = 1
+
+        # ── Cached results ───────────────────────────────────────────────────
+        _cached_img = st.session_state.get(_img_res_key)
+        _cached_n   = st.session_state.get(_img_n_key, 0)
+
+        if _cached_img:
+            if isinstance(_cached_img, list):
+                # Storyboard
+                st.markdown(f"### {UI_MEDIA_IMG_STORY_HDR}")
+                st.caption(UI_MEDIA_IMG_STORY_NOTE)
+                cols = st.columns(min(len(_cached_img), 2))
+                for i, img_item in enumerate(_cached_img):
+                    with cols[i % 2]:
+                        st.markdown(f"**{img_item['title']}**")
+                        if img_item.get("error"):
+                            st.error(img_item["error"])
+                        elif img_item.get("bytes"):
+                            st.image(img_item["bytes"], use_container_width=True)
+                            st.download_button(
+                                UI_MEDIA_DL_IMG_N.format(n=img_item["image_number"]),
+                                data=img_item["bytes"],
+                                file_name=f"scene_{img_item['image_number']}.png",
+                                mime="image/png",
+                                use_container_width=True,
+                                key=f"dl_img_s_{qc}_{_cached_n}_{img_item['image_number']}",
+                            )
+                        if img_item.get("prompt_used"):
+                            with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                                st.code(img_item["prompt_used"], language=None)
+                if st.button(UI_MEDIA_IMG_REGEN_STORY, key=f"regen_img_story_{qc}_{_cached_n}"):
                     del st.session_state[_img_res_key]
                     st.rerun()
-
-        if st.button(
-            UI_MEDIA_GENERATE_IMG_BTN,
-            type="primary",
-            use_container_width=True,
-            key=f"gen_img_btn_{qc}",
-        ):
-            _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
-            with _status:
-                img_prompt = generate_image_prompt(_final, _img_ctx or "")
-                st.write(UI_MEDIA_STEP_IMAGE)
-                result = generate_image(img_prompt, size=_size_val)
-                if result["error"]:
-                    _status.update(
-                        label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
-                        state="error",
-                        expanded=True,
+            elif isinstance(_cached_img, dict) and _cached_img.get("bytes"):
+                # Single image
+                st.image(_cached_img["bytes"], use_container_width=True)
+                with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
+                    st.code(_cached_img["prompt"], language=None)
+                dl_col, regen_col = st.columns(2)
+                with dl_col:
+                    st.download_button(
+                        UI_MEDIA_DL_IMG_BTN,
+                        data=_cached_img["bytes"],
+                        file_name="ai_council_marketing.png",
+                        mime="image/png",
+                        use_container_width=True,
+                        key=f"dl_img_{qc}_{_cached_img['gen_n']}",
                     )
-                    st.error(result["error"])
-                else:
-                    _status.update(label="הושלם!", state="complete", expanded=False)
-                    _n = st.session_state.get(_img_n_key, 0) + 1
-                    st.session_state[_img_n_key] = _n
-                    st.session_state[_img_res_key] = {
-                        "bytes":  result["bytes"],
-                        "prompt": result["prompt_used"],
-                        "gen_n":  _n,
-                    }
-                    st.rerun()
+                with regen_col:
+                    if st.button(UI_MEDIA_REGEN_BTN, use_container_width=True,
+                                 key=f"regen_img_{qc}_{_cached_img['gen_n']}"):
+                        del st.session_state[_img_res_key]
+                        st.rerun()
+
+        # ── Generate button ───────────────────────────────────────────────────
+        _img_btn_label = (
+            f"✨ צור סטוריבורד ({_n_images} תמונות)"
+            if _img_storyboard
+            else UI_MEDIA_GENERATE_IMG_BTN
+        )
+        if st.button(_img_btn_label, type="primary", use_container_width=True,
+                     key=f"gen_img_btn_{qc}"):
+            _n = st.session_state.get(_img_n_key, 0) + 1
+            st.session_state[_img_n_key] = _n
+
+            if _img_storyboard:
+                _status = st.status(UI_MEDIA_STEP_IMG_STORY, expanded=True)
+                with _status:
+                    scenes = generate_image_storyboard(
+                        final_answer=_final,
+                        question=_question,
+                        campaign_context=_img_ctx or "",
+                        n_images=_n_images,
+                        size=_size_val,
+                        branding_notes=_branding_notes,
+                    )
+                    any_ok = any(not s.get("error") for s in scenes)
+                    _status.update(
+                        label="הושלם!" if any_ok else "שגיאה בחלק מהתמונות",
+                        state="complete" if any_ok else "error",
+                        expanded=False,
+                    )
+                st.session_state[_img_res_key] = scenes
+                st.rerun()
+            else:
+                _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
+                with _status:
+                    img_prompt = generate_image_prompt(
+                        _final, _img_ctx or "",
+                    )
+                    if _branding_notes:
+                        img_prompt = f"[Brand guidelines: {_branding_notes}] " + img_prompt
+                    st.write(UI_MEDIA_STEP_IMAGE)
+                    result = generate_image(img_prompt, size=_size_val)
+                    if result["error"]:
+                        _status.update(
+                            label=f"{UI_MEDIA_ERROR_PREFIX}: {result['error']}",
+                            state="error", expanded=True,
+                        )
+                        st.error(result["error"])
+                    else:
+                        _status.update(label="הושלם!", state="complete", expanded=False)
+                        st.session_state[_img_res_key] = {
+                            "bytes":  result["bytes"],
+                            "prompt": result["prompt_used"],
+                            "gen_n":  _n,
+                        }
+                        st.rerun()
 
     # ── Section 2: Video generation ──────────────────────────────────────────
     with st.expander(UI_MEDIA_VIDEO_EXPANDER, expanded=False):

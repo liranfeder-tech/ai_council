@@ -102,6 +102,33 @@ def _replicate_key() -> str:
 # Prompt generation (Claude converts the debate answer → media prompt)
 # ---------------------------------------------------------------------------
 
+def analyse_branding(
+    image_bytes: list,
+    image_mime: list,
+) -> str:
+    """
+    Use Claude Vision to analyse uploaded app screenshots / logo and return
+    a compact brand brief (colors, style, mood) that can be injected into
+    image and video prompts for visual consistency.
+
+    Returns an empty string if no images are provided or on any error.
+    """
+    if not image_bytes:
+        return ""
+    try:
+        from ai_factory import call_model_with_citations
+        from glossary import PROMPT_MEDIA_BRANDING_ANALYSIS
+        result, _ = call_model_with_citations(
+            "claude",
+            PROMPT_MEDIA_BRANDING_ANALYSIS,
+            images=image_bytes[:3],
+            images_mime=image_mime[:3],
+        )
+        return result.strip()
+    except Exception:
+        return ""
+
+
 def generate_image_prompt(final_answer: str, campaign_context: str = "") -> str:
     """
     Ask the council's master model to distil the debate answer into an
@@ -580,3 +607,137 @@ def generate_video_storyboard(
         })
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Image storyboard — 3-4 DALL-E 3 images that together tell a story
+# ---------------------------------------------------------------------------
+
+def _parse_image_storyboard_json(raw: str) -> list[dict]:
+    """Parse Claude's JSON image storyboard. Returns [] on failure."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.rsplit("```", 1)[0]
+    try:
+        data = json.loads(raw.strip())
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _generate_one_image(item: dict, size: str) -> dict:
+    """Generate a single storyboard image. Called in parallel."""
+    prompt = item.get("prompt", "")
+    result = generate_image(prompt, size=size)
+    return {
+        "image_number": item.get("image_number", 0),
+        "title":        item.get("title", ""),
+        "prompt_used":  result["prompt_used"],
+        "bytes":        result["bytes"],
+        "error":        result["error"],
+    }
+
+
+def generate_image_storyboard(
+    final_answer: str,
+    question: str = "",
+    campaign_context: str = "",
+    n_images: int = 4,
+    size: str = "landscape",
+    branding_notes: str = "",
+    max_workers: int = 4,
+) -> list[dict]:
+    """
+    Generate a 3-4 image storyboard with DALL-E 3.
+
+    Claude writes a scene-by-scene brief (JSON), then all images are
+    generated in parallel via DALL-E 3.
+
+    Parameters
+    ----------
+    final_answer : str
+        Council debate final answer.
+    question : str
+        Original user question / product description.
+    campaign_context : str
+        Optional extra campaign notes.
+    n_images : int
+        3 or 4 images.
+    size : str
+        "landscape", "portrait", or "square".
+    branding_notes : str
+        Output of analyse_branding() — injected into the prompt.
+    max_workers : int
+        Parallel DALL-E calls (max 4 to stay within rate limits).
+
+    Returns
+    -------
+    list[dict]
+        One dict per image: {image_number, title, prompt_used, bytes, error}
+    """
+    from ai_factory import call_model
+    from glossary import PROMPT_MEDIA_IMAGE_STORYBOARD
+
+    n_images = max(3, min(4, n_images))
+
+    branding_section = (
+        f"--- App Brand Guidelines ---\n{branding_notes}\n"
+        if branding_notes.strip()
+        else ""
+    )
+    image_4_instruction = (
+        "Image 4 — RESOLUTION: the happy outcome / relief moment"
+        if n_images == 4
+        else ""
+    )
+    image_4_json = (
+        ',\n  {{"image_number": 4, "title": "<2-3 Hebrew words>", "prompt": "<English prompt>"}}'
+        if n_images == 4
+        else ""
+    )
+
+    storyboard_prompt = PROMPT_MEDIA_IMAGE_STORYBOARD.format(
+        n_images=n_images,
+        question=question.strip() or "See campaign context.",
+        campaign_context=campaign_context.strip() or "None provided",
+        branding_section=branding_section,
+        image_4_instruction=image_4_instruction,
+        image_4_json=image_4_json,
+    )
+
+    raw_json  = call_model("claude", storyboard_prompt)
+    scenes    = _parse_image_storyboard_json(raw_json)
+
+    if not scenes:
+        return [{
+            "image_number": 0,
+            "title":        "שגיאה",
+            "prompt_used":  raw_json,
+            "bytes":        None,
+            "error":        "Claude לא החזיר JSON תקין. נסה שוב.",
+        }]
+
+    # Generate all images in parallel
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(scenes))) as ex:
+        futures = {ex.submit(_generate_one_image, scene, size): scene for scene in scenes}
+        results_map = {}
+        for future in as_completed(futures):
+            scene = futures[future]
+            try:
+                results_map[scene.get("image_number", 0)] = future.result()
+            except Exception as exc:
+                results_map[scene.get("image_number", 0)] = {
+                    "image_number": scene.get("image_number", 0),
+                    "title":        scene.get("title", ""),
+                    "prompt_used":  scene.get("prompt", ""),
+                    "bytes":        None,
+                    "error":        str(exc),
+                }
+
+    # Return in scene order
+    return [results_map[s["image_number"]] for s in scenes if s["image_number"] in results_map]

@@ -1400,6 +1400,27 @@ UI_MEDIA_STORYBOARD_NOTE   = "הצג את 3 הקליפים ברצף לקהל ה�
 UI_MEDIA_SCENE_GENERATING  = "מייצר קליפ {n}/3..."
 UI_MEDIA_STEP_STORYBOARD   = "שלב 1/2 — בונה תסריט 3 סצינות עם Claude..."
 
+# Image storyboard
+UI_MEDIA_IMAGE_MODE_LABEL   = "מצב ייצור תמונה"
+UI_MEDIA_IMAGE_MODE_SINGLE  = "תמונה בודדת"
+UI_MEDIA_IMAGE_MODE_STORY   = "סטוריבורד — 3-4 תמונות"
+UI_MEDIA_IMG_STORY_HDR      = "📸 סטוריבורד תמונות שיווקיות"
+UI_MEDIA_IMG_STORY_NOTE     = "הצג את התמונות ברצף — יחד הן מספרות סיפור שלם"
+UI_MEDIA_IMG_STORY_COUNT    = "מספר תמונות"
+UI_MEDIA_STEP_IMG_STORY     = "שלב 1/2 — בונה תסריט תמונות עם Claude..."
+UI_MEDIA_STEP_IMG_GEN       = "שלב 2/2 — מייצר תמונה {n}/{total} עם DALL-E 3..."
+UI_MEDIA_IMG_REGEN_STORY    = "🔄 צור סטוריבורד מחדש"
+UI_MEDIA_DL_IMG_N           = "⬇️ הורד תמונה {n}"
+
+# App branding upload (optional, shared between image and video)
+UI_MEDIA_BRANDING_LABEL     = "לוגו / צילום מסך של האפליקציה (אופציונלי)"
+UI_MEDIA_BRANDING_HELP      = (
+    "העלה עד 3 תמונות — לוגו, צילומי מסך, או חומרי מיתוג. "
+    "Claude ינתח את הצבעים, הסגנון והטון ויגדיר אותם בכל הפרומפטים."
+)
+UI_MEDIA_BRANDING_ANALYSING = "מנתח מיתוג האפליקציה עם Claude Vision..."
+UI_MEDIA_BRANDING_DONE      = "מיתוג אופיין — סגנון ייושם על כל הפרומפטים"
+
 # ---------------------------------------------------------------------------
 # Cultural Campaign Generator — market profiles and UI strings
 # ---------------------------------------------------------------------------
@@ -1564,6 +1585,54 @@ FOR VIDEOS (CRITICAL — 5-6 seconds only):
 - 3-4 sentences, max 180 words.
 
 Write the {media_type} prompt now — one paragraph, no headers:"""
+
+PROMPT_MEDIA_BRANDING_ANALYSIS = """\
+You are a brand analyst. Examine the uploaded app screenshot(s) and/or logo carefully.
+
+Extract and return a compact brand brief in this exact format (plain text, no markdown):
+
+COLOR PALETTE: list the 3-5 dominant hex colors or descriptive names
+VISUAL STYLE: one sentence describing the overall aesthetic (e.g. "clean minimal with deep navy and white")
+MOOD: one or two adjectives (e.g. "trustworthy, calm")
+KEY VISUAL ELEMENTS: any recurring shapes, icons, or motifs visible in the screenshots
+TYPOGRAPHY FEEL: describe font weight and style visible (e.g. "bold sans-serif, modern")
+
+Keep the entire brief under 80 words. This brief will be injected into image and video \
+generation prompts to ensure visual consistency with the app's brand."""
+
+PROMPT_MEDIA_IMAGE_STORYBOARD = """\
+You are a senior creative director creating a {n_images}-image photo storyboard \
+for a mobile app marketing campaign.
+
+Each image is a standalone cinematic photograph. Together they tell the full story.
+
+--- Product ---
+{question}
+
+--- Campaign Context ---
+{campaign_context}
+
+{branding_section}
+
+Story arc ({n_images} images):
+  Image 1 — SITUATION: the character and their problem, before the product (set the scene)
+  Image 2 — ACTION: the exact moment of using the product
+  Image 3 — RESPONSE: someone receives the alert / the product working
+  {image_4_instruction}
+
+RULES FOR EACH IMAGE PROMPT:
+1. Photorealistic cinematic photography — no illustrations, no graphics
+2. Consistent visual identity: same character appearance, same lighting mood across all images
+3. Each prompt: [shot size] + [character] + [environment] + [action/moment] + [lighting] + [mood]
+4. Max 100 words per prompt. No text, logos, UI in the scene.
+5. The images must make sense as a sequence even without captions
+
+Output ONLY a JSON array — no explanation, no markdown:
+[
+  {{"image_number": 1, "title": "<2-3 Hebrew words>", "prompt": "<English prompt>"}},
+  {{"image_number": 2, "title": "<2-3 Hebrew words>", "prompt": "<English prompt>"}},
+  {{"image_number": 3, "title": "<2-3 Hebrew words>", "prompt": "<English prompt>"}}{image_4_json}
+]"""
 
 # Cultural panel UI strings
 UI_CULTURAL_EXPANDER        = "🌍 קמפיין מותאם תרבותית — מספר שווקים במקביל"
