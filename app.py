@@ -1223,6 +1223,38 @@ def _render_citation_cards(citations: list[dict]) -> None:
                 )
 
 
+def _safe_image(data: bytes, **kwargs) -> bool:
+    """
+    Display an image safely, catching PIL decode errors.
+    Returns True if displayed successfully, False otherwise.
+    """
+    if not data:
+        st.error("התמונה שהתקבלה ריקה — נסה לייצר מחדש.")
+        return False
+    try:
+        st.image(data, **kwargs)
+        return True
+    except Exception as _img_err:
+        st.error(f"לא ניתן להציג את התמונה ({type(_img_err).__name__}). נסה לייצר מחדש.")
+        return False
+
+
+def _safe_video(data: bytes, **kwargs) -> bool:
+    """
+    Display a video safely, catching decode errors.
+    Returns True if displayed successfully, False otherwise.
+    """
+    if not data:
+        st.error("הקליפ שהתקבל ריק — נסה לייצר מחדש.")
+        return False
+    try:
+        st.video(data, **kwargs)
+        return True
+    except Exception as _vid_err:
+        st.error(f"לא ניתן להציג את הקליפ ({type(_vid_err).__name__}). נסה לייצר מחדש.")
+        return False
+
+
 def _render_media_panel(results: dict) -> None:
     """
     Render the AI media-generation panel below the debate results.
@@ -1337,7 +1369,7 @@ def _render_media_panel(results: dict) -> None:
                         if img_item.get("error"):
                             st.error(img_item["error"])
                         elif img_item.get("bytes"):
-                            st.image(img_item["bytes"], use_container_width=True)
+                            _safe_image(img_item["bytes"], use_container_width=True)
                             st.download_button(
                                 UI_MEDIA_DL_IMG_N.format(n=img_item["image_number"]),
                                 data=img_item["bytes"],
@@ -1354,7 +1386,7 @@ def _render_media_panel(results: dict) -> None:
                     st.rerun()
             elif isinstance(_cached_img, dict) and _cached_img.get("bytes"):
                 # Single image
-                st.image(_cached_img["bytes"], use_container_width=True)
+                _safe_image(_cached_img["bytes"], use_container_width=True)
                 with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
                     st.code(_cached_img["prompt"], language=None)
                 dl_col, regen_col = st.columns(2)
@@ -1504,7 +1536,7 @@ def _render_media_panel(results: dict) -> None:
                     if _s_err:
                         st.error(f"{UI_MEDIA_ERROR_PREFIX}: {_s_err}")
                     elif _s_bytes:
-                        st.video(_s_bytes)
+                        _safe_video(_s_bytes)
                         dl_col2, _ = st.columns([1, 1])
                         with dl_col2:
                             _gen_n = st.session_state.get(_vid_n_key, 1)
@@ -1521,7 +1553,7 @@ def _render_media_panel(results: dict) -> None:
                             st.code(_s_prom, language=None)
             elif isinstance(_cached, dict) and _cached.get("bytes"):
                 # Single clip result
-                st.video(_cached["bytes"])
+                _safe_video(_cached["bytes"])
                 with st.expander(UI_MEDIA_PROMPT_USED_HDR, expanded=False):
                     st.code(_cached["prompt"], language=None)
                 dl_col, regen_col = st.columns(2)
@@ -1734,7 +1766,7 @@ def _render_cultural_panel(results: dict) -> None:
                             st.error(f"{UI_MEDIA_ERROR_PREFIX}: {_err}")
                         elif _bytes:
                             if _media_type == "image":
-                                st.image(_bytes, use_container_width=True)
+                                _safe_image(_bytes, use_container_width=True)
                                 st.download_button(
                                     UI_CULTURAL_DL_IMG,
                                     data=_bytes,
@@ -1744,7 +1776,7 @@ def _render_cultural_panel(results: dict) -> None:
                                     key=f"dl_cultural_img_{qc}_{_gen_n}_{_mkt}",
                                 )
                             else:
-                                st.video(_bytes)
+                                _safe_video(_bytes)
                                 st.download_button(
                                     UI_CULTURAL_DL_VID,
                                     data=_bytes,
