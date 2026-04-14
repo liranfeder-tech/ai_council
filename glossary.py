@@ -1279,35 +1279,45 @@ scenario where calm, competence, or rescue is the emotional payoff.
 Write the DALL-E 3 prompt now:"""
 
 PROMPT_MEDIA_VIDEO_BRIEF = """\
-You are a senior creative director specialising in 6-second video ads for mobile apps \
-(platforms: Apple Ads, TikTok, Instagram Reels, YouTube Shorts).
+You are a senior creative director specialising in ultra-short video ads (5-6 seconds) \
+for mobile apps on Apple Ads, TikTok, Instagram Reels, and YouTube Shorts.
 
-Your task: read the AI council debate answer below and convert its core marketing \
-message into a single, highly optimised text-to-video generation prompt \
-(for Minimax Video-01 or Luma Dream Machine).
+You have ONE job: describe a single, hyper-focused moment that shows the product being \
+used in a specific, realistic scenario — nothing more.
 
---- AI Council Final Answer ---
+--- Original Product / Campaign Brief ---
+{question}
+
+--- AI Council Key Insights ---
 {final_answer}
 
 --- Additional Campaign Context ---
 {campaign_context}
 
-## Output Rules — follow EXACTLY
+## CRITICAL RULES — violating any rule makes the prompt worthless
 
-1. Output ONLY the video prompt — no preamble, no explanation, no markdown headers.
-2. Write in English.
-3. Describe in this order: (a) opening scene and characters, (b) the key action / moment, \
-(c) camera movement, (d) emotional climax / payoff, (e) lighting and visual tone.
-4. Include explicit motion — what changes from frame 0 to frame 6? Show a mini narrative arc.
-5. Length: 3-5 sentences, no more than 220 words.
-6. No text overlays — describe only what the camera physically sees.
-7. Use real-world relatable scenarios that demonstrate the product value in action \
-(e.g., a person in distress who is saved, a hiker who sends their location, etc.).
-8. Specify camera language: "close-up", "wide establishing shot", "handheld", \
-"slow push-in", "over-the-shoulder", etc.
-9. Specify mood and grade: "golden hour", "blue-hour city lights", "high-contrast thriller grade", etc.
+### FORBIDDEN (never include these):
+- Generic lifestyle footage (woman walking down street, entering home, drinking coffee)
+- Abstract metaphors or symbolic imagery
+- Vague emotional scenes with no clear product connection
+- More than ONE scene or location
+- Any narrative that requires more than 6 seconds to understand
 
-Write the video generation prompt now:"""
+### REQUIRED (every prompt must have ALL of these):
+1. ONE specific character in ONE specific situation that directly demonstrates the product
+2. The EXACT product action happening on screen (e.g. whispers a code word, presses button, \
+   phone screen shows alert) — be precise, not implied
+3. A visible consequence or reaction within the same clip (e.g. contact receives alert, \
+   rescue arrives, location ping appears)
+4. Camera: specify shot type + movement (close-up, handheld push-in, over-shoulder, etc.)
+5. Lighting + colour grade that matches the emotional tone (thriller blue, warm golden hour, etc.)
+6. Length: 3-4 sentences, max 180 words
+
+### STRUCTURE TO FOLLOW:
+[WHO + WHERE + WHAT they are doing] → [THE PRODUCT MOMENT — exact action] → \
+[IMMEDIATE VISIBLE RESULT] + [CAMERA] + [LIGHTING/GRADE]
+
+Write the video prompt now — one paragraph, no headers, English only:"""
 
 # ---------------------------------------------------------------------------
 # Media panel — UI strings (Hebrew, matching the app's language convention)
@@ -1468,12 +1478,16 @@ CULTURAL_PROFILES: dict[str, dict] = {
 }
 
 PROMPT_MEDIA_CULTURAL_BRIEF = """\
-You are a senior creative director with deep cross-cultural advertising expertise.
+You are a senior creative director with deep cross-cultural advertising expertise \
+specialising in ultra-short mobile ads (5-6 seconds for video, single frame for image).
 
 Your task: generate a highly optimised {media_type} prompt for the {market} market, \
-based on the AI council's final answer below.
+adapted to local visual norms and grounded in the product's actual use case.
 
---- AI Council Final Answer ---
+--- Original Product / Campaign Brief ---
+{question}
+
+--- AI Council Key Insights ---
 {final_answer}
 
 --- Additional Campaign Context ---
@@ -1484,19 +1498,24 @@ based on the AI council's final answer below.
 
 ## Output Rules — follow EXACTLY
 
-1. Output ONLY the {media_type} prompt — no preamble, no explanation.
-2. Write in English (generation models work best in English regardless of target market).
-3. Apply the cultural profile above to every element: setting, characters, clothing, \
-   color palette, lighting, and emotional tone.
-4. For images: [Shot type] + [Scene] + [Visual style] + [Lighting] + [Cultural mood]. \
-   2-3 sentences, max 160 words. No text/logos in scene.
-5. For videos: [Opening scene] + [Character action] + [Camera movement] + \
-   [Emotional payoff] + [Visual grade]. 3-5 sentences, max 220 words. Show motion arc.
-6. The output must feel like it was produced *for* that culture, not just translated.
-7. For safety/health apps: show a scenario that resonates specifically with this culture's \
-   relationship to personal safety, family protection, or women's health.
+1. Output ONLY the {media_type} prompt — no preamble, no explanation, English only.
+2. Apply the cultural profile to: characters' appearance and clothing, setting, \
+   colour palette, lighting, and emotional tone.
+3. The output must feel produced *for* that culture — not just translated.
 
-Write the {media_type} prompt now:"""
+FOR IMAGES:
+- [Shot type] + [Character in culturally-appropriate setting] + [The product moment] + \
+  [Visual style + lighting matching the culture's aesthetic]. 2-3 sentences, max 160 words.
+- No text, logos, or UI elements in the scene.
+
+FOR VIDEOS (CRITICAL — 5-6 seconds only):
+- FORBIDDEN: generic lifestyle footage, woman walking, entering home, abstract scenes.
+- REQUIRED: ONE specific character → ONE exact product action on screen → ONE visible result.
+- Structure: [WHO + WHERE culturally specific] → [EXACT product moment] → \
+  [IMMEDIATE REACTION] + [camera] + [lighting/grade matching {market} aesthetic].
+- 3-4 sentences, max 180 words.
+
+Write the {media_type} prompt now — one paragraph, no headers:"""
 
 # Cultural panel UI strings
 UI_CULTURAL_EXPANDER        = "🌍 קמפיין מותאם תרבותית — מספר שווקים במקביל"

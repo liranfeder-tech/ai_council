@@ -1392,7 +1392,10 @@ def _render_media_panel(results: dict) -> None:
         ):
             _status = st.status(UI_MEDIA_STEP_PROMPT, expanded=True)
             with _status:
-                vid_prompt = generate_video_prompt(_final, _vid_ctx or "")
+                vid_prompt = generate_video_prompt(
+                    _final, _vid_ctx or "",
+                    question=results.get("question", ""),
+                )
                 st.write(UI_MEDIA_STEP_VIDEO)
                 result = generate_video(
                     vid_prompt,
@@ -1512,6 +1515,7 @@ def _render_cultural_panel(results: dict) -> None:
                     size=_size_val,
                     campaign_context=_campaign_ctx or "",
                     video_model_key=_vid_model_val,
+                    question=results.get("question", ""),
                 )
                 _status.update(label="הושלם!", state="complete", expanded=False)
 

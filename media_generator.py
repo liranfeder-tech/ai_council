@@ -120,10 +120,14 @@ def generate_image_prompt(final_answer: str, campaign_context: str = "") -> str:
     return result.strip().strip("`").strip()
 
 
-def generate_video_prompt(final_answer: str, campaign_context: str = "") -> str:
+def generate_video_prompt(
+    final_answer: str,
+    campaign_context: str = "",
+    question: str = "",
+) -> str:
     """
     Ask the council's master model to distil the debate answer into a
-    text-to-video generation prompt (English, cinematic, motion-aware).
+    text-to-video generation prompt (English, cinematic, product-focused).
 
     Returns a plain-text English prompt string.
     """
@@ -131,6 +135,7 @@ def generate_video_prompt(final_answer: str, campaign_context: str = "") -> str:
     from glossary import PROMPT_MEDIA_VIDEO_BRIEF
 
     brief = PROMPT_MEDIA_VIDEO_BRIEF.format(
+        question=question.strip() or "See council answer below.",
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
     )
@@ -297,6 +302,7 @@ def _generate_one_cultural_variant(
     media_type: str,       # "image" or "video"
     size: str,
     video_model_key: str,
+    question: str = "",
 ) -> dict:
     """
     Generate a single culturally-adapted image or video for one market.
@@ -311,6 +317,7 @@ def _generate_one_cultural_variant(
     brief_prompt = PROMPT_MEDIA_CULTURAL_BRIEF.format(
         media_type="image" if media_type == "image" else "video",
         market=market_name,
+        question=question.strip() or "See council answer below.",
         final_answer=final_answer.strip(),
         campaign_context=campaign_context.strip() or "None provided",
         cultural_brief=profile["brief"],
@@ -348,6 +355,7 @@ def generate_cultural_variants(
     campaign_context: str = "",
     video_model_key: str = "minimax",
     max_workers: int = 3,
+    question: str = "",
 ) -> list[dict]:
     """
     Generate culturally-adapted media for multiple markets in parallel.
@@ -394,6 +402,7 @@ def generate_cultural_variants(
                 name, profile,
                 final_answer, campaign_context,
                 media_type, size, video_model_key,
+                question,
             ): name
             for name, profile in profiles_to_run
         }
