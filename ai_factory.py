@@ -91,6 +91,7 @@ def _call_anthropic(
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
     max_tokens: int = 4096,
+    request_timeout: Optional[float] = None,
 ) -> str:
     """Call the Anthropic (Claude) API and return the text reply."""
     client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "anthropic"), timeout=API_TIMEOUT_SECONDS)
@@ -112,11 +113,15 @@ def _call_anthropic(
     else:
         content = prompt
 
-    message = client.messages.create(
+    create_kwargs: dict = dict(
         model=model_id,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": content}],
     )
+    if request_timeout is not None:
+        create_kwargs["timeout"] = request_timeout
+
+    message = client.messages.create(**create_kwargs)
     return message.content[0].text
 
 
@@ -314,6 +319,7 @@ def call_model_with_citations(
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
     max_tokens: int = 4096,
+    request_timeout: Optional[float] = None,
 ) -> tuple[str, list[dict]]:
     """
     Like call_model() but also returns structured citation data.
@@ -336,7 +342,7 @@ def call_model_with_citations(
         if provider == "google":
             return _call_google(model_id, prompt, images, images_mime, max_tokens)
         elif provider == "anthropic":
-            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens), []
+            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens, request_timeout), []
         elif provider == "openai":
             return _call_openai(model_id, prompt, images, images_mime, max_tokens), []
         elif provider == "xai":
