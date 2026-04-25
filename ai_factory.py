@@ -90,6 +90,7 @@ def _call_anthropic(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the Anthropic (Claude) API and return the text reply."""
     client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "anthropic"), timeout=API_TIMEOUT_SECONDS)
@@ -113,7 +114,7 @@ def _call_anthropic(
 
     message = client.messages.create(
         model=model_id,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": content}],
     )
     return message.content[0].text
@@ -124,6 +125,7 @@ def _call_openai(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the OpenAI API and return the text reply."""
     client = openai.OpenAI(api_key=_key("OPENAI_API_KEY", "openai"), timeout=API_TIMEOUT_SECONDS)
@@ -144,7 +146,7 @@ def _call_openai(
     response = client.chat.completions.create(
         model=model_id,
         messages=[{"role": "user", "content": content}],
-        max_tokens=4096,
+        max_tokens=max_tokens,
     )
     return response.choices[0].message.content
 
@@ -154,6 +156,7 @@ def _call_google(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> tuple[str, list[dict]]:
     """
     Call the Google Generative AI (Gemini) API.
@@ -172,7 +175,7 @@ def _call_google(
 
     cfg = genai_types.GenerateContentConfig(
         system_instruction=_GEMINI_FIELD_AGENT_INSTRUCTION,
-        max_output_tokens=4096,
+        max_output_tokens=max_tokens,
     )
 
     if images:
@@ -197,6 +200,7 @@ def _call_xai(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the xAI (Grok) API using the OpenAI-compatible client."""
     client = openai.OpenAI(
@@ -221,7 +225,7 @@ def _call_xai(
     response = client.chat.completions.create(
         model=model_id,
         messages=[{"role": "user", "content": content}],
-        max_tokens=4096,
+        max_tokens=max_tokens,
     )
     return response.choices[0].message.content
 
@@ -309,6 +313,7 @@ def call_model_with_citations(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> tuple[str, list[dict]]:
     """
     Like call_model() but also returns structured citation data.
@@ -329,13 +334,13 @@ def call_model_with_citations(
 
     try:
         if provider == "google":
-            return _call_google(model_id, prompt, images, images_mime)
+            return _call_google(model_id, prompt, images, images_mime, max_tokens)
         elif provider == "anthropic":
-            return _call_anthropic(model_id, prompt, images, images_mime), []
+            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens), []
         elif provider == "openai":
-            return _call_openai(model_id, prompt, images, images_mime), []
+            return _call_openai(model_id, prompt, images, images_mime, max_tokens), []
         elif provider == "xai":
-            return _call_xai(model_id, prompt, images, images_mime), []
+            return _call_xai(model_id, prompt, images, images_mime, max_tokens), []
         else:
             return f"ERROR: Unsupported provider '{provider}' for model '{model_key}'.", []
 
@@ -353,6 +358,7 @@ def call_model(
     prompt: str,
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    max_tokens: int = 4096,
 ) -> str:
     """
     Call any registered model by its glossary key and return its text reply.
@@ -367,6 +373,8 @@ def call_model(
         Raw image file bytes for each uploaded visual asset.
     images_mime : list[str], optional
         MIME type per image (e.g. ["image/jpeg", "image/png"]).
+    max_tokens : int
+        Maximum output tokens. Default 4096. Pass 8192 for synthesis stages.
 
     Returns
     -------
@@ -383,16 +391,16 @@ def call_model(
 
     try:
         if provider == "anthropic":
-            return _call_anthropic(model_id, prompt, images, images_mime)
+            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens)
 
         elif provider == "openai":
-            return _call_openai(model_id, prompt, images, images_mime)
+            return _call_openai(model_id, prompt, images, images_mime, max_tokens)
 
         elif provider == "xai":
-            return _call_xai(model_id, prompt, images, images_mime)
+            return _call_xai(model_id, prompt, images, images_mime, max_tokens)
 
         elif provider == "google":
-            text, citations = _call_google(model_id, prompt, images, images_mime)
+            text, citations = _call_google(model_id, prompt, images, images_mime, max_tokens)
             if citations:
                 footer = "\n".join(f"- [{c['title']}]({c['url']})" for c in citations)
                 text += f"\n\n---\n**Grounding sources (Google Search)**\n{footer}"

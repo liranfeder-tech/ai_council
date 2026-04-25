@@ -123,7 +123,8 @@ def _fetch_one_answer(
         question=question,
     )
     answer, citations = call_model_with_citations(
-        model_key, prompt, images, images_mime
+        model_key, prompt, images, images_mime,
+        max_tokens=8192 if _ACADEMIC_MODE.get() else 4096,
     )
     return model_key, answer, citations
 
@@ -694,8 +695,9 @@ def run_stage4_consensus(
             exchange_rate=exchange_rate,
         )
 
+    _synthesis_tokens = 8192
     final_answer, _cit = call_model_with_citations(
-        MASTER_MODEL_KEY, prompt, images, images_mime
+        MASTER_MODEL_KEY, prompt, images, images_mime, max_tokens=_synthesis_tokens
     )
     fallback_used = False
 
@@ -706,7 +708,7 @@ def run_stage4_consensus(
                 f"⚠️ {master_label} failed — switching to {fallback_label} …",
             )
         fb_answer, _fb_cit = call_model_with_citations(
-            FALLBACK_MODEL_KEY, prompt, images, images_mime
+            FALLBACK_MODEL_KEY, prompt, images, images_mime, max_tokens=_synthesis_tokens
         )
         if not fb_answer.startswith("ERROR:"):
             final_answer  = fb_answer
