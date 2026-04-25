@@ -124,7 +124,7 @@ def _fetch_one_answer(
     )
     answer, citations = call_model_with_citations(
         model_key, prompt, images, images_mime,
-        max_tokens=8192 if _ACADEMIC_MODE.get() else 4096,
+        max_tokens=4096,
     )
     return model_key, answer, citations
 
