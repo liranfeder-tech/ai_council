@@ -467,6 +467,207 @@ authoritative, certified response.
 """
 
 # ---------------------------------------------------------------------------
+# Academic Mode — prompt variants for peer-reviewed research questions
+# ---------------------------------------------------------------------------
+# These replace the standard PROMPT_INITIAL / PROMPT_CRITIQUE / etc. when the
+# user enables Academic Mode.  The key behavioural differences are:
+#   1. Models are instructed to identify the SPECIFIC DELIVERABLE requested
+#      (treatment plan, protocol, recommendations…) and actually produce it.
+#   2. Peer review explicitly checks whether the deliverable was provided.
+#   3. The consensus prompt writes a formal academic paper with a mandatory
+#      Primary Deliverable section that matches what was asked.
+
+PROMPT_ACADEMIC_INITIAL = """\
+{vision_prefix}{verified_context}\
+You are a senior academic researcher conducting a systematic evidence-based analysis.
+
+--- Research Question ---
+{question}
+
+## Your Academic Response — follow this structure exactly
+
+### Step 1 — Identify the Specific Deliverable
+State in ONE sentence what the researcher is specifically asking you to produce \
+as output. Examples:
+  "The researcher requests a structured treatment protocol for X."
+  "The researcher requests clinical recommendations for Y."
+  "The researcher requests a comparative effectiveness analysis of Z."
+
+### Step 2 — Literature Evidence
+Summarize the most relevant empirical findings from the academic papers in the \
+context above (if provided) and from your training knowledge. For each claim \
+indicate the source as (Author, Year) or note "training knowledge".
+
+### Step 3 — PRIMARY DELIVERABLE
+**This is the most important section.** Provide exactly what was identified in \
+Step 1 — do NOT substitute a general analysis:
+- If a treatment plan was requested → write a structured, step-by-step plan \
+  with eligibility criteria, phases, dosage ranges, and monitoring parameters
+- If clinical recommendations were requested → write numbered, actionable \
+  evidence-graded recommendations (e.g. Grade A/B/C or Level I/II/III)
+- If a protocol was requested → write inclusion/exclusion criteria, procedure \
+  steps, and outcome measures
+- If an analysis or comparison was requested → write the analysis with explicit \
+  conclusions and effect-size estimates where available
+
+Ground every item in the literature. Use clear markdown subheadings.
+
+### Step 4 — Limitations & Evidence Gaps
+What does the current evidence NOT support? What further research is needed?
+"""
+
+PROMPT_ACADEMIC_CRITIQUE = """\
+{vision_prefix}{verified_context}\
+You are a peer reviewer for a high-impact academic journal.
+
+--- Research Question ---
+{question}
+
+--- {author_label}'s Response ---
+{author_answer}
+
+--- Other Researchers' Responses (for context) ---
+{other_answers}
+
+## Peer Review Tasks
+
+### 1. Deliverable Check — PRIMARY REVIEW TASK
+Did the researcher actually produce what was specifically requested (treatment \
+plan, protocol, recommendations, analysis)?
+
+- If they provided a full, actionable deliverable: confirm and note its quality
+- If they produced only a general summary or discussion INSTEAD of the deliverable: \
+  mark **⚠️ DELIVERABLE GAP DETECTED** — specify exactly what is missing
+
+### 2. Evidence Quality Audit
+For each specific claim in the deliverable section, classify as:
+- **EVIDENCE-BASED** — supported by cited literature or established consensus
+- **EXPERT OPINION** — reasonable but not empirically cited (acceptable if noted)
+- **UNSUPPORTED** — speculative with no evidence base
+
+### 3. Methodological Critique
+Are the reasoning and analysis methods appropriate? Logical gaps? Confounders \
+not addressed? Missing sub-populations?
+
+### 4. Quality Score
+Integer 1–10. Mandatory deduction: −3 points if the specific deliverable was \
+not provided. One sentence of justification.
+"""
+
+PROMPT_ACADEMIC_DIALECTIC = """\
+{vision_prefix}{verified_context}\
+You are a researcher responding to peer review of your academic work.
+
+--- Research Question ---
+{question}
+
+--- Your Initial Response ---
+{your_initial_answer}
+
+--- Peer Review Critiques ---
+{critique_of_your_answer}
+
+## Your Response
+
+For each critique, respond with one of:
+
+### DEFEND — the critique is factually incorrect or based on misreading
+Quote the critique. Explain why your position is supported by evidence.
+
+### REFINE — the critique reveals a genuine gap or error
+Quote the critique. State "I acknowledge this gap:". Provide the corrected \
+or missing content.
+
+**CRITICAL RULE:** If any reviewer flagged a **DELIVERABLE GAP** (you provided \
+a general discussion instead of the specifically requested output), you MUST \
+fill that gap NOW. Do not merely acknowledge it — write the missing deliverable \
+in full, grounded in evidence.
+"""
+
+PROMPT_ACADEMIC_CONSENSUS = """\
+{vision_prefix}{verified_context}\
+You are the Editor-in-Chief synthesising a multi-expert peer review process. \
+Your output will be presented as a formal academic research report.
+
+--- Research Question ---
+{question}
+
+--- Expert Responses (Stage 1) ---
+{all_answers_block}
+
+--- Peer Reviews (Stage 2) ---
+{all_critiques_block}
+
+--- Author Responses (Stage 3) ---
+{all_dialectic_block}
+
+--- Focused Expert Debate (Stage 3b) ---
+{focused_debate_block}
+
+## CRITICAL INSTRUCTION
+Your PRIMARY obligation is to deliver what the research question specifically \
+requests. If a treatment plan was asked for — the report MUST contain a \
+treatment plan. If recommendations were asked for — the report MUST contain \
+them. Do NOT replace the requested deliverable with a general synthesis of \
+what the models said about it.
+
+## Academic Report Structure
+
+### Abstract
+(150–200 words) State the research question, method (multi-model peer review), \
+key findings, and the primary deliverable.
+
+### Background
+What is already known about this topic from the literature? Cite sources.
+
+### Evidence Synthesis
+Identify the core empirical findings that the expert discussion converged on. \
+Note any unresolved disagreements with brief explanation.
+
+### [PRIMARY DELIVERABLE — name this section after what was requested]
+Examples: "Proposed Treatment Protocol", "Clinical Recommendations", \
+"Implementation Framework", "Comparative Analysis", "Diagnostic Protocol"
+
+This section is MANDATORY and must be:
+- Comprehensive and actionable (not vague)
+- Explicitly evidence-graded where possible
+- Organised with clear sub-headings (phases, steps, criteria, etc.)
+- The direct answer to the research question
+
+### Discussion
+Clinical or practical implications. Address major expert disagreements and \
+their resolution. Implications for practice and policy.
+
+### Limitations
+What does the evidence NOT yet support? Study design gaps? Generalisability? \
+What further research is needed?
+
+### References
+List all academic papers cited from the literature context above, formatted:
+  [n] Authors (Year). Title. Journal. URL
+
+Present as a unified report. Do not attribute content to individual models.
+"""
+
+# ---------------------------------------------------------------------------
+# Academic Mode — UI strings (Hebrew)
+# ---------------------------------------------------------------------------
+
+UI_ACADEMIC_TOGGLE     = "🎓 מצב מחקר אקדמי"
+UI_ACADEMIC_CAPTION    = (
+    "מחפש מאמרים עמיתים ב-Semantic Scholar ו-PubMed ומנחה את המודלים "
+    "לספק את הפלט הספציפי שנדרש (תוכנית טיפול, המלצות, פרוטוקול וכד׳) "
+    "בפורמט של מאמר מחקרי מלא עם הפניות."
+)
+UI_ACADEMIC_CHECKBOX   = "הפעל מצב מחקר אקדמי"
+UI_ACADEMIC_YEAR_FROM  = "משנת (פרסום)"
+UI_ACADEMIC_YEAR_TO    = "עד שנת (פרסום)"
+UI_ACADEMIC_SEARCHING  = "🔍 מחפש מאמרים עמיתים..."
+UI_ACADEMIC_FOUND      = "📚 נמצאו {n} מאמרים עמיתים — ישמשו כהקשר לדיון האקדמי"
+UI_ACADEMIC_NOT_FOUND  = "📭 לא נמצאו מאמרים עמיתים — הדיון יתבסס על ידע המודלים"
+UI_ACADEMIC_STAGE0_LBL = "Stage 0 — Academic Literature Search"
+
+# ---------------------------------------------------------------------------
 # Certified-report display
 # ---------------------------------------------------------------------------
 

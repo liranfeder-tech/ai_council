@@ -59,9 +59,27 @@ from glossary import (
     UI_STAGE3B_NO_DEBATES,
     UI_SPINNER_STAGE3B,
     VISION_MODE_PROMPT,
+    PROMPT_ACADEMIC_INITIAL,
+    PROMPT_ACADEMIC_CRITIQUE,
+    PROMPT_ACADEMIC_DIALECTIC,
+    PROMPT_ACADEMIC_CONSENSUS,
+    UI_ACADEMIC_SEARCHING,
+    UI_ACADEMIC_FOUND,
+    UI_ACADEMIC_NOT_FOUND,
+    UI_ACADEMIC_STAGE0_LBL,
 )
 from ai_factory import call_model, call_model_with_citations
 from search_engine import get_live_context, get_live_market_data, search_is_available
+
+# ---------------------------------------------------------------------------
+# Academic Mode context variable — thread-safe, inherited by child threads
+# ---------------------------------------------------------------------------
+# Set to True in run_council_debate() when academic_mode=True.
+# All stage functions check this to select the right prompt template.
+
+import contextvars as _cv
+
+_ACADEMIC_MODE: _cv.ContextVar[bool] = _cv.ContextVar("academic_mode", default=False)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +116,8 @@ def _fetch_one_answer(
     images_mime: Optional[List[str]] = None,
 ) -> tuple[str, str, List[dict]]:
     """Call a single model and return (model_key, answer_text, citations)."""
-    prompt = PROMPT_INITIAL.format(
+    template = PROMPT_ACADEMIC_INITIAL if _ACADEMIC_MODE.get() else PROMPT_INITIAL
+    prompt = template.format(
         vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
@@ -203,7 +222,8 @@ def _critique_one(
 
     Returns (reviewer_key, target_key, critique_text).
     """
-    prompt = PROMPT_CRITIQUE.format(
+    template = PROMPT_ACADEMIC_CRITIQUE if _ACADEMIC_MODE.get() else PROMPT_CRITIQUE
+    prompt = template.format(
         vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
@@ -325,7 +345,8 @@ def _dialectic_one(
     Returns (model_key, dialectic_response_text).
     """
     critique_block = "\n\n---\n\n".join(critiques_against)
-    prompt = PROMPT_DIALECTIC.format(
+    template = PROMPT_ACADEMIC_DIALECTIC if _ACADEMIC_MODE.get() else PROMPT_DIALECTIC
+    prompt = template.format(
         vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
@@ -650,17 +671,28 @@ def run_stage4_consensus(
     if progress_cb:
         progress_cb(0.1, f"🏛️ {master_label} (Mediator) is synthesising …")
 
-    prompt = COUNCIL_CONSENSUS_PROMPT.format(
-        vision_prefix=_vision_prefix(images),
-        verified_context=verified_context,
-        question=question,
-        all_answers_block=_format_all_answers(answers),
-        all_critiques_block=_format_all_critiques(critiques),
-        all_dialectic_block=_format_all_dialectic(dialectic),
-        focused_debate_block=_format_focused_debate(focused_debate),
-        silver_price=silver_price,
-        exchange_rate=exchange_rate,
-    )
+    if _ACADEMIC_MODE.get():
+        prompt = PROMPT_ACADEMIC_CONSENSUS.format(
+            vision_prefix=_vision_prefix(images),
+            verified_context=verified_context,
+            question=question,
+            all_answers_block=_format_all_answers(answers),
+            all_critiques_block=_format_all_critiques(critiques),
+            all_dialectic_block=_format_all_dialectic(dialectic),
+            focused_debate_block=_format_focused_debate(focused_debate),
+        )
+    else:
+        prompt = COUNCIL_CONSENSUS_PROMPT.format(
+            vision_prefix=_vision_prefix(images),
+            verified_context=verified_context,
+            question=question,
+            all_answers_block=_format_all_answers(answers),
+            all_critiques_block=_format_all_critiques(critiques),
+            all_dialectic_block=_format_all_dialectic(dialectic),
+            focused_debate_block=_format_focused_debate(focused_debate),
+            silver_price=silver_price,
+            exchange_rate=exchange_rate,
+        )
 
     final_answer, _cit = call_model_with_citations(
         MASTER_MODEL_KEY, prompt, images, images_mime
@@ -697,6 +729,9 @@ def run_council_debate(
     images_mime: Optional[List[str]] = None,
     previous_context: Optional[dict] = None,
     code_context: str = "",
+    academic_mode: bool = False,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
     stage0_cb: Optional[ProgressCallback] = None,
     stage1_cb: Optional[ProgressCallback] = None,
     stage2_cb: Optional[ProgressCallback] = None,
@@ -741,9 +776,21 @@ def run_council_debate(
     images      = images      or []
     images_mime = images_mime or []
 
-    # ── Stage 0: Pre-flight live search ───────────────────────────────────
+    # ── Set academic mode context variable (inherited by all child threads) ──
+    _ACADEMIC_MODE.set(academic_mode)
+
+    # ── Stage 0: Pre-flight search (live market data + optional academic lit) ─
     if stage0_cb:
-        stage0_cb(0.0, UI_STAGE0_SEARCHING)
+        stage0_cb(0.0, UI_ACADEMIC_SEARCHING if academic_mode else UI_STAGE0_SEARCHING)
+
+    # Academic literature search (runs instead of / alongside standard search)
+    academic_papers: list = []
+    if academic_mode:
+        try:
+            from academic_search import search_academic_papers, build_literature_context_block
+            academic_papers = search_academic_papers(question, year_from, year_to, max_results=10)
+        except Exception:
+            academic_papers = []
 
     clean_data              = get_live_context(question)
     broad_block, preflight_citations = get_live_market_data(question)
@@ -763,17 +810,24 @@ def run_council_debate(
 
     # Stage 0 complete — log the live values to the UI
     if stage0_cb:
-        has_commodity_data_early = silver_price != "N/A" or exchange_rate != "N/A"
-        if has_commodity_data_early:
-            _stage0_msg = UI_STAGE0_COMPLETE_COMMODITY.format(
-                silver=silver_price,
-                rate=exchange_rate,
+        if academic_mode:
+            _stage0_msg = (
+                UI_ACADEMIC_FOUND.format(n=len(academic_papers))
+                if academic_papers
+                else UI_ACADEMIC_NOT_FOUND
             )
-        elif broad_block:
-            _n_results = broad_block.count("\n•") or broad_block.count("\n-") or "some"
-            _stage0_msg = UI_STAGE0_COMPLETE_GENERAL.format(n=_n_results)
         else:
-            _stage0_msg = UI_STAGE0_COMPLETE_NONE
+            has_commodity_data_early = silver_price != "N/A" or exchange_rate != "N/A"
+            if has_commodity_data_early:
+                _stage0_msg = UI_STAGE0_COMPLETE_COMMODITY.format(
+                    silver=silver_price,
+                    rate=exchange_rate,
+                )
+            elif broad_block:
+                _n_results = broad_block.count("\n•") or broad_block.count("\n-") or "some"
+                _stage0_msg = UI_STAGE0_COMPLETE_GENERAL.format(n=_n_results)
+            else:
+                _stage0_msg = UI_STAGE0_COMPLETE_NONE
         stage0_cb(1.0, _stage0_msg)
 
     current_date  = datetime.now().strftime("%A, %B %d, %Y")
@@ -812,6 +866,13 @@ def run_council_debate(
         )
     if broad_block:
         context_parts.append(broad_block)
+
+    # ── Academic literature block (injected when academic_mode is True) ───────
+    if academic_papers:
+        from academic_search import build_literature_context_block
+        lit_block = build_literature_context_block(academic_papers)
+        if lit_block:
+            context_parts.append(lit_block)
 
     # ── Code Review: inject project files as the primary verified source
     if code_context:
@@ -932,4 +993,6 @@ def run_council_debate(
         "fallback_used":      fallback_used,
         "citations":          citations,
         "has_images":         len(images) > 0,
+        "academic_mode":      academic_mode,
+        "academic_papers":    academic_papers,
     }

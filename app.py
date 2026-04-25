@@ -228,6 +228,11 @@ from glossary import (
     UI_APIKEY_ACTIVE_BADGE,
     UI_APIKEY_GET_KEY_LINK,
     UI_APIKEY_UNCHANGED_SKIP,
+    UI_ACADEMIC_TOGGLE,
+    UI_ACADEMIC_CAPTION,
+    UI_ACADEMIC_CHECKBOX,
+    UI_ACADEMIC_YEAR_FROM,
+    UI_ACADEMIC_YEAR_TO,
 )
 from logic_engine import run_council_debate
 from project_reader import scan_project
@@ -1061,6 +1066,41 @@ _combined_extra_context = "\n\n".join(filter(None, [
     st.session_state.data_file_context,
     st.session_state.code_review_context,
 ]))
+
+# ---------------------------------------------------------------------------
+# Academic Mode — optional panel for research / literature-grounded analysis
+# ---------------------------------------------------------------------------
+
+with st.expander(UI_ACADEMIC_TOGGLE, expanded=False):
+    st.caption(UI_ACADEMIC_CAPTION)
+    _academic_on = st.checkbox(
+        UI_ACADEMIC_CHECKBOX,
+        value=False,
+        key=f"academic_mode_{st.session_state._query_counter}",
+    )
+    if _academic_on:
+        _col_yf, _col_yt = st.columns(2)
+        with _col_yf:
+            _academic_year_from = st.number_input(
+                UI_ACADEMIC_YEAR_FROM,
+                min_value=2000,
+                max_value=2025,
+                value=2019,
+                step=1,
+                key=f"academic_year_from_{st.session_state._query_counter}",
+            )
+        with _col_yt:
+            _academic_year_to = st.number_input(
+                UI_ACADEMIC_YEAR_TO,
+                min_value=2000,
+                max_value=2025,
+                value=2025,
+                step=1,
+                key=f"academic_year_to_{st.session_state._query_counter}",
+            )
+    else:
+        _academic_year_from = None
+        _academic_year_to   = None
 
 # Auto-fill a default question when context is loaded but no question typed
 _effective_question = question.strip()
@@ -2297,6 +2337,15 @@ if start_button or _fup_question is not None:
             images_mime=_active_images_mime,
             previous_context=_previous_ctx,
             code_context=_active_code_ctx,
+            academic_mode=st.session_state.get(
+                f"academic_mode_{st.session_state._query_counter}", False
+            ),
+            year_from=st.session_state.get(
+                f"academic_year_from_{st.session_state._query_counter}"
+            ),
+            year_to=st.session_state.get(
+                f"academic_year_to_{st.session_state._query_counter}"
+            ),
             stage0_cb=stage0_cb,
             stage1_cb=stage1_cb,
             stage2_cb=stage2_cb,
@@ -2342,6 +2391,34 @@ if start_button or _fup_question is not None:
 # ---------------------------------------------------------------------------
 if st.session_state.current_results:
     _display_results(st.session_state.current_results)
+
+    # ── Academic papers panel (shown only when academic_mode was active) ───
+    _acad_papers = st.session_state.current_results.get("academic_papers", [])
+    if _acad_papers:
+        with st.expander(f"📚 מאמרים אקדמיים שנמצאו ({len(_acad_papers)})", expanded=False):
+            for i, p in enumerate(_acad_papers, 1):
+                _title   = p.get("title", "")
+                _authors = p.get("authors", "")
+                _year    = p.get("year", "")
+                _journal = p.get("journal", "")
+                _url     = p.get("url", "")
+                _abs     = p.get("abstract", "")
+                _cit     = p.get("citations")
+                _src     = p.get("source", "")
+                _hdr = f"**[{i}] {_title}**"
+                st.markdown(_hdr)
+                _meta = f"_{_authors} ({_year})"
+                if _journal:
+                    _meta += f". {_journal}"
+                if _cit is not None:
+                    _meta += f". Cited by {_cit}"
+                _meta += f" — {_src}_"
+                st.markdown(_meta)
+                if _url:
+                    st.markdown(f"🔗 [{_url}]({_url})")
+                if _abs:
+                    st.caption(_abs[:400] + ("…" if len(_abs) > 400 else ""))
+                st.divider()
 
     # ── Media generation panel ─────────────────────────────────────────────
     st.divider()
