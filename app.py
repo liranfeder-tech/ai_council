@@ -2165,9 +2165,12 @@ if start_button or _fup_question is not None:
         st.warning(UI_WARNING_MIN_MODELS)
         st.stop()
 
-    # ── Cache-hit check: skip for follow-ups (always unique) ─────────────────
+    # ── Cache-hit check: skip for follow-ups and Academic Mode (always fresh) ──
+    _academic_on_now = st.session_state.get(
+        f"academic_mode_{st.session_state._query_counter}", False
+    )
     if _active_question.strip() and not _active_images and not st.session_state._force_rerun \
-            and _fup_question is None:
+            and _fup_question is None and not _academic_on_now:
         _uid_for_cache = (st.session_state.user or {}).get("uid")
         _hist_for_cache = get_user_history(_uid_for_cache) if _uid_for_cache else load_history()
         _q_norm = _active_question.strip().lower()
