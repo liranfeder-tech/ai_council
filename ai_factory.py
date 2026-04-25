@@ -93,13 +93,17 @@ def _call_anthropic(
     max_tokens: int = 4096,
     request_timeout: Optional[float] = None,
 ) -> str:
-    """Call the Anthropic (Claude) API and return the text reply."""
+    """Call the Anthropic (Claude) API using streaming to keep the connection alive.
+
+    Streaming sends chunks every few tokens, preventing reverse-proxy timeouts
+    (Streamlit Cloud's nginx cuts silent connections after ~120 s).
+    """
     client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "anthropic"), timeout=API_TIMEOUT_SECONDS)
     images      = images      or []
     images_mime = images_mime or []
 
     if images:
-        content = []
+        content: list = []
         for img_bytes, img_mime in zip(images, images_mime):
             content.append({
                 "type": "image",
@@ -113,16 +117,16 @@ def _call_anthropic(
     else:
         content = prompt
 
-    create_kwargs: dict = dict(
+    stream_kwargs: dict = dict(
         model=model_id,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": content}],
     )
     if request_timeout is not None:
-        create_kwargs["timeout"] = request_timeout
+        stream_kwargs["timeout"] = request_timeout
 
-    message = client.messages.create(**create_kwargs)
-    return message.content[0].text
+    with client.messages.stream(**stream_kwargs) as stream:
+        return stream.get_final_text()
 
 
 def _call_openai(
