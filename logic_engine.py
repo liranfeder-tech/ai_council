@@ -695,8 +695,8 @@ def run_stage4_consensus(
             exchange_rate=exchange_rate,
         )
 
-    _synthesis_tokens  = 8192
-    _synthesis_timeout = 300.0  # Claude needs ~200s for 8192 tokens; 300s gives margin
+    _synthesis_tokens  = 16000
+    _synthesis_timeout = 420.0  # 16K tokens at ~40 tok/s ≈ 400s; 420s gives margin
     final_answer, _cit = call_model_with_citations(
         MASTER_MODEL_KEY, prompt, images, images_mime,
         max_tokens=_synthesis_tokens, request_timeout=_synthesis_timeout,
