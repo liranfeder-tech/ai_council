@@ -695,24 +695,28 @@ def run_stage4_consensus(
             exchange_rate=exchange_rate,
         )
 
-    _synthesis_tokens  = 16000
-    _synthesis_timeout = 420.0  # 16K tokens at ~40 tok/s ≈ 400s; 420s gives margin
+    # claude-sonnet-4-6 hard cap is 8192 output tokens; Gemini Pro supports 16K+.
+    _claude_tokens   = 8192
+    _gemini_tokens   = 16000
+    _synthesis_timeout = 420.0
+
     final_answer, _cit = call_model_with_citations(
         MASTER_MODEL_KEY, prompt, images, images_mime,
-        max_tokens=_synthesis_tokens, request_timeout=_synthesis_timeout,
+        max_tokens=_claude_tokens, request_timeout=_synthesis_timeout,
     )
     fallback_used = False
 
-    if final_answer.startswith("ERROR:"):
+    if not final_answer or final_answer.startswith("ERROR:"):
         if progress_cb:
             progress_cb(
                 0.5,
                 f"⚠️ {master_label} failed — switching to {fallback_label} …",
             )
         fb_answer, _fb_cit = call_model_with_citations(
-            FALLBACK_MODEL_KEY, prompt, images, images_mime, max_tokens=_synthesis_tokens
+            FALLBACK_MODEL_KEY, prompt, images, images_mime,
+            max_tokens=_gemini_tokens, request_timeout=_synthesis_timeout,
         )
-        if not fb_answer.startswith("ERROR:"):
+        if fb_answer and not fb_answer.startswith("ERROR:"):
             final_answer  = fb_answer
             fallback_used = True
 

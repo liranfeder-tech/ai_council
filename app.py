@@ -1967,6 +1967,9 @@ def _display_results(results: dict) -> None:
 </div>
 </div>
 """
+    if not final:
+        st.warning("⚠️ הסינתזה הושלמה אך לא הוחזרה תשובה. נסה שוב.")
+        return
     if final.startswith("ERROR:"):
         st.error(final)
     else:
@@ -2379,9 +2382,12 @@ if start_button or _fup_question is not None:
         pass
 
     _current_uid  = (st.session_state.user or {}).get("uid")
-    _cached_path  = save_to_history(_live_results, pdf_bytes=_pdf_for_cache, uid=_current_uid)
-    if _cached_path:
-        _live_results["pdf_cache_path"] = _cached_path
+    try:
+        _cached_path  = save_to_history(_live_results, pdf_bytes=_pdf_for_cache, uid=_current_uid)
+        if _cached_path:
+            _live_results["pdf_cache_path"] = _cached_path
+    except Exception:
+        pass
 
     st.session_state.current_results = _live_results
     st.session_state.from_history    = False
