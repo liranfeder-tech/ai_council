@@ -2155,11 +2155,6 @@ _fup_mime_carry = st.session_state.pop("_pending_followup_mime", [])
 _fup_data_carry = st.session_state.pop("_pending_followup_data", "")
 _fup_academic   = st.session_state.pop("_pending_followup_academic", False)
 
-# Restore academic mode for this follow-up run so the synthesis uses 16K tokens
-# and the academic prompt — identical to what the original debate used.
-if _fup_academic and _fup_question is not None:
-    st.session_state[f"academic_mode_{st.session_state._query_counter}"] = True
-
 if start_button or _fup_question is not None:
     # Resolve the effective question and context for this run
     _active_question    = _fup_question if _fup_question is not None else _effective_question
@@ -2178,8 +2173,11 @@ if start_button or _fup_question is not None:
         st.stop()
 
     # ── Cache-hit check: skip for follow-ups and Academic Mode (always fresh) ──
-    _academic_on_now = st.session_state.get(
-        f"academic_mode_{st.session_state._query_counter}", False
+    # For follow-ups: carry academic mode from the previous debate (_fup_academic)
+    # to avoid the widget-key conflict (Streamlit forbids writing to a widget key).
+    _academic_on_now = (
+        _fup_academic if _fup_question is not None
+        else st.session_state.get(f"academic_mode_{st.session_state._query_counter}", False)
     )
     if _active_question.strip() and not _active_images and not st.session_state._force_rerun \
             and _fup_question is None and not _academic_on_now:
@@ -2352,9 +2350,7 @@ if start_button or _fup_question is not None:
             images_mime=_active_images_mime,
             previous_context=_previous_ctx,
             code_context=_active_code_ctx,
-            academic_mode=st.session_state.get(
-                f"academic_mode_{st.session_state._query_counter}", False
-            ),
+            academic_mode=_academic_on_now,
             year_from=st.session_state.get(
                 f"academic_year_from_{st.session_state._query_counter}"
             ),
