@@ -23,8 +23,11 @@ from dotenv import load_dotenv
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime as _datetime
 from pathlib import Path
 from typing import Optional
+
+_CURRENT_YEAR = _datetime.now().year
 
 load_dotenv()  # טוען את המפתחות מקובץ ה-.env
 
@@ -1084,7 +1087,7 @@ with st.expander(UI_ACADEMIC_TOGGLE, expanded=False):
             _academic_year_from = st.number_input(
                 UI_ACADEMIC_YEAR_FROM,
                 min_value=2000,
-                max_value=2025,
+                max_value=_CURRENT_YEAR,
                 value=2019,
                 step=1,
                 key=f"academic_year_from_{st.session_state._query_counter}",
@@ -1093,8 +1096,8 @@ with st.expander(UI_ACADEMIC_TOGGLE, expanded=False):
             _academic_year_to = st.number_input(
                 UI_ACADEMIC_YEAR_TO,
                 min_value=2000,
-                max_value=2025,
-                value=2025,
+                max_value=_CURRENT_YEAR,
+                value=_CURRENT_YEAR,
                 step=1,
                 key=f"academic_year_to_{st.session_state._query_counter}",
             )
