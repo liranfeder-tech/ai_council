@@ -899,7 +899,7 @@ def run_council_debate(
         fup_block = (
             FOLLOWUP_CONTEXT_BLOCK
             .replace("{prev_question}", prev_q)
-            .replace("{prev_answer}",  prev_answer[:3000])
+            .replace("{prev_answer}",  prev_answer[:8000])
         )
         context_parts.insert(0, fup_block)
 

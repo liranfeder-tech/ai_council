@@ -2153,6 +2153,12 @@ _fup_ctx        = st.session_state.pop("_followup_ctx", None)
 _fup_imgs_carry = st.session_state.pop("_pending_followup_imgs", [])
 _fup_mime_carry = st.session_state.pop("_pending_followup_mime", [])
 _fup_data_carry = st.session_state.pop("_pending_followup_data", "")
+_fup_academic   = st.session_state.pop("_pending_followup_academic", False)
+
+# Restore academic mode for this follow-up run so the synthesis uses 16K tokens
+# and the academic prompt — identical to what the original debate used.
+if _fup_academic and _fup_question is not None:
+    st.session_state[f"academic_mode_{st.session_state._query_counter}"] = True
 
 if start_button or _fup_question is not None:
     # Resolve the effective question and context for this run
@@ -2492,12 +2498,16 @@ if st.session_state.current_results:
         bool((_fup_q or "").strip()) or bool(_fup_imgs) or bool(_fup_data_ctx)
     )
     if st.button(UI_FOLLOWUP_SUBMIT_BTN, type="primary", disabled=not _fup_can_submit):
-        st.session_state["_pending_followup"]       = (_fup_q or "").strip()
-        st.session_state["_followup_ctx"]           = st.session_state.current_results
-        st.session_state["_pending_followup_imgs"]  = _fup_imgs
-        st.session_state["_pending_followup_mime"]  = _fup_imgs_mime
-        st.session_state["_pending_followup_data"]  = _fup_data_ctx
-        st.session_state.current_results            = None
-        st.session_state.from_history               = False
-        st.session_state._query_counter            += 1
+        st.session_state["_pending_followup"]          = (_fup_q or "").strip()
+        st.session_state["_followup_ctx"]              = st.session_state.current_results
+        st.session_state["_pending_followup_imgs"]     = _fup_imgs
+        st.session_state["_pending_followup_mime"]     = _fup_imgs_mime
+        st.session_state["_pending_followup_data"]     = _fup_data_ctx
+        # Carry academic mode forward so the follow-up uses the same synthesis settings
+        st.session_state["_pending_followup_academic"] = st.session_state.get(
+            f"academic_mode_{st.session_state._query_counter}", False
+        )
+        st.session_state.current_results               = None
+        st.session_state.from_history                  = False
+        st.session_state._query_counter               += 1
         st.rerun()
