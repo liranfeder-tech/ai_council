@@ -695,10 +695,13 @@ def run_stage4_consensus(
             exchange_rate=exchange_rate,
         )
 
-    # claude-sonnet-4-6 hard cap is 8192 output tokens; Gemini Pro supports 16K+.
-    _claude_tokens   = 8192
-    _gemini_tokens   = 16000
-    _synthesis_timeout = 420.0
+    # Claude (MASTER) is always the synthesizer.
+    # For academic mode we allow 16K tokens (full 3-part report); regular mode 8K.
+    # timeout is sized generously: 16K tokens at ~30-40 tok/s ≈ 400-530s → 600s cap.
+    _is_academic       = _ACADEMIC_MODE.get()
+    _claude_tokens     = 16000 if _is_academic else 8192
+    _gemini_tokens     = 16000
+    _synthesis_timeout = 600.0 if _is_academic else 420.0
 
     final_answer, _cit = call_model_with_citations(
         MASTER_MODEL_KEY, prompt, images, images_mime,

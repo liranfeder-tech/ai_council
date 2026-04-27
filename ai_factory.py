@@ -166,6 +166,7 @@ def _call_google(
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
     max_tokens: int = 4096,
+    request_timeout: Optional[float] = None,
 ) -> tuple[str, list[dict]]:
     """
     Call the Google Generative AI (Gemini) API.
@@ -175,9 +176,10 @@ def _call_google(
     tuple[str, list[dict]]
         (answer_text, citations) — citations always empty (from search_engine.py).
     """
+    http_timeout_ms = int((request_timeout or API_TIMEOUT_SECONDS) * 1000)
     client = genai.Client(
         api_key=_key("GOOGLE_API_KEY", "google"),
-        http_options=genai_types.HttpOptions(timeout=API_TIMEOUT_SECONDS * 1000),
+        http_options=genai_types.HttpOptions(timeout=http_timeout_ms),
     )
     images      = images      or []
     images_mime = images_mime or []
@@ -344,7 +346,7 @@ def call_model_with_citations(
 
     try:
         if provider == "google":
-            return _call_google(model_id, prompt, images, images_mime, max_tokens)
+            return _call_google(model_id, prompt, images, images_mime, max_tokens, request_timeout)
         elif provider == "anthropic":
             return _call_anthropic(model_id, prompt, images, images_mime, max_tokens, request_timeout), []
         elif provider == "openai":
