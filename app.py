@@ -1012,8 +1012,21 @@ if "code_review_warnings" not in st.session_state:
     st.session_state.code_review_warnings = []
 
 with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_review_context)):
-    _cr_col_path, _cr_col_btn, _cr_col_clear = st.columns([5, 1, 1])
+    st.caption(
+        "💡 על Streamlit Cloud, השרת לא רואה את המחשב שלך — "
+        "העלה את הפרויקט כקובץ ZIP. בהרצה לוקאלית, אפשר גם להזין נתיב מקומי."
+    )
 
+    # Option A — ZIP upload (works on Streamlit Cloud)
+    _cr_zip = st.file_uploader(
+        "📦 העלה ZIP של הפרויקט",
+        type=["zip"],
+        accept_multiple_files=False,
+        key="code_review_zip_input",
+    )
+
+    # Option B — local path (only works when running locally)
+    _cr_col_path, _cr_col_btn, _cr_col_clear = st.columns([5, 1, 1])
     with _cr_col_path:
         _cr_path = st.text_input(
             UI_CODE_REVIEW_PATH_LABEL,
@@ -1021,10 +1034,8 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
             key="code_review_path_input",
             label_visibility="collapsed",
         )
-
     with _cr_col_btn:
         _cr_scan = st.button(UI_CODE_REVIEW_SCAN_BTN, use_container_width=True)
-
     with _cr_col_clear:
         if st.button(UI_CODE_REVIEW_CLEAR_BTN, use_container_width=True,
                      disabled=not st.session_state.code_review_context):
@@ -1033,18 +1044,45 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
             st.session_state.code_review_warnings = []
             st.rerun()
 
-    if _cr_scan and _cr_path:
-        with st.spinner(UI_CODE_REVIEW_SCANNING):
-            _cr_block, _cr_files, _cr_warns = scan_project(_cr_path.strip())
-        if _cr_block:
-            st.session_state.code_review_context  = _cr_block
-            st.session_state.code_review_files    = _cr_files
-            st.session_state.code_review_warnings = _cr_warns
-            st.rerun()
-        else:
-            # scan returned nothing — display the reason
-            _cr_err = _cr_warns[0] if _cr_warns else UI_CODE_REVIEW_EMPTY
-            st.error(_cr_err)
+    # Trigger scan only when the scan button is pressed (zip wins if both present)
+    _cr_should_scan = _cr_scan and (bool(_cr_zip) or bool(_cr_path))
+
+    if _cr_should_scan:
+        import tempfile, zipfile, shutil
+        _scan_target: str = ""
+        _cr_temp_dir: Optional[str] = None
+        try:
+            if _cr_zip is not None:
+                _cr_temp_dir = tempfile.mkdtemp(prefix="aicouncil_zip_")
+                try:
+                    with zipfile.ZipFile(_cr_zip, "r") as _zf:
+                        _zf.extractall(_cr_temp_dir)
+                    # If the zip wraps everything in a single top folder, use it
+                    _entries = [e for e in os.listdir(_cr_temp_dir) if not e.startswith(".")]
+                    if len(_entries) == 1 and os.path.isdir(os.path.join(_cr_temp_dir, _entries[0])):
+                        _scan_target = os.path.join(_cr_temp_dir, _entries[0])
+                    else:
+                        _scan_target = _cr_temp_dir
+                except zipfile.BadZipFile:
+                    st.error("❌ קובץ ה-ZIP פגום או לא תקין")
+                    _scan_target = ""
+            else:
+                _scan_target = _cr_path.strip()
+
+            if _scan_target:
+                with st.spinner(UI_CODE_REVIEW_SCANNING):
+                    _cr_block, _cr_files, _cr_warns = scan_project(_scan_target)
+                if _cr_block:
+                    st.session_state.code_review_context  = _cr_block
+                    st.session_state.code_review_files    = _cr_files
+                    st.session_state.code_review_warnings = _cr_warns
+                    st.rerun()
+                else:
+                    _cr_err = _cr_warns[0] if _cr_warns else UI_CODE_REVIEW_EMPTY
+                    st.error(_cr_err)
+        finally:
+            if _cr_temp_dir and os.path.isdir(_cr_temp_dir):
+                shutil.rmtree(_cr_temp_dir, ignore_errors=True)
 
     if st.session_state.code_review_context:
         _cr_name  = st.session_state.code_review_files[0].split("/")[0] if st.session_state.code_review_files else _cr_path
