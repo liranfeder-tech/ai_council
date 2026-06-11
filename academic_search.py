@@ -710,8 +710,9 @@ def build_literature_context_block(papers: List[dict]) -> str:
     Returns "" when the list is empty.
 
     Non-English papers are tagged with their language and every entry shows its
-    source database; the model is told it may cite non-English works by their
-    original-language titles.
+    source database; the model is told to TRANSLATE third-language titles when
+    citing (the report must contain only the question's language and English —
+    the PDF font cannot render e.g. Arabic, and the reader shouldn't need to).
     """
     if not papers:
         return ""
@@ -721,7 +722,11 @@ def build_literature_context_block(papers: List[dict]) -> str:
         "The following papers were retrieved via live academic search across "
         "multiple databases (OpenAlex, Semantic Scholar, PubMed, Google Scholar).",
         "They are VERIFIED sources. Cite ALL sources as (Authors, Year). "
-        "Non-English sources may be cited with their original-language titles.\n",
+        "CITATION LANGUAGE RULE: when a source's title is in any language other "
+        "than English or the language of the research question, TRANSLATE the "
+        "title into the question's language and add the original language in "
+        "brackets, e.g. [תורגם מערבית] — NEVER copy third-language titles "
+        "verbatim into your report. Keep URLs exactly as given.\n",
     ]
 
     for i, p in enumerate(papers, 1):

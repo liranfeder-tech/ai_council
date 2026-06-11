@@ -519,6 +519,12 @@ write: "⚠️ No real-time grounding data was available. All numeric claims omi
 Do NOT attribute claims to individual models.  Present as a single, \
 authoritative, certified response.
 
+## Language rule
+Write the ENTIRE answer in the language of the user's question. Source titles \
+in other languages must be translated into the question's language (original \
+language noted in brackets); URLs stay verbatim. Never include text in a third \
+language (e.g. Arabic titles in a Hebrew report).
+
 ## Formatting rules (the answer renders both on screen and into a PDF)
 - NEVER draw ASCII-art or box-drawing tables (characters like ┌ ─ │ ╔ ═, or \
 "pictures" made of aligned pipes/dashes/plus signs).
@@ -747,6 +753,12 @@ List all academic papers cited from the literature context above, formatted:
   [n] Authors (Year). Title. Journal. URL
 
 Present as a unified report. Do not attribute content to individual models.
+
+## Language rule
+Write the ENTIRE report in the language of the research question. Source titles \
+in other languages must be translated into the question's language (original \
+language noted in brackets); URLs stay verbatim. Never include text in a third \
+language (e.g. Arabic titles in a Hebrew report).
 
 ## Formatting rules (the report renders both on screen and into a PDF)
 - NEVER draw ASCII-art or box-drawing tables (characters like ┌ ─ │ ╔ ═, or \
