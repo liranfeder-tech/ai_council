@@ -172,6 +172,11 @@ _GLYPH_FALLBACKS: dict[int, str] = {
     **{cp: "|" for cp in (0x2502, 0x2503, 0x2551, 0x254E, 0x254F, 0x2575, 0x2577, 0x2579, 0x257B)},
     0x2192: "->", 0x2190: "<-", 0x2191: "^", 0x2193: "v",
     0x21D2: "=>", 0x21D0: "<=", 0x2194: "<->",
+    # Geometric shapes (U+25A0-U+25FF) — decorative triangles/squares/circles
+    # models sprinkle as visual markers; Assistant has no glyphs for them.
+    **{cp: "" for cp in range(0x25A0, 0x2600)},
+    0x25BC: "v", 0x25B2: "^", 0x25BA: ">", 0x25C4: "<",
+    0x25CF: "•", 0x25CB: "o", 0x25A0: "•",
 }
 
 

@@ -549,7 +549,7 @@ def _render_api_key_expander() -> None:
                 st.markdown(f"{icon} **{cfg['label']}** &nbsp; <small style='color:grey'>{status_lbl}</small>",
                             unsafe_allow_html=True)
             with col_link:
-                st.link_button(UI_APIKEY_GET_KEY_LINK, cfg["url"], use_container_width=True)
+                st.link_button(UI_APIKEY_GET_KEY_LINK, cfg["url"], width="stretch")
 
             # ── Key input ─────────────────────────────────────────────────────
             val = st.text_input(
@@ -567,7 +567,7 @@ def _render_api_key_expander() -> None:
         col_save, col_clear = st.columns([3, 1])
 
         with col_save:
-            if st.button(UI_APIKEY_VALIDATE_SAVE, type="primary", use_container_width=True):
+            if st.button(UI_APIKEY_VALIDATE_SAVE, type="primary", width="stretch"):
                 # Separate unchanged keys from new/modified ones
                 unchanged = {p: k for p, k in draft.items()
                              if k and k == st.session_state.user_api_keys.get(p)}
@@ -618,7 +618,7 @@ def _render_api_key_expander() -> None:
                 st.rerun()
 
         with col_clear:
-            if st.button(UI_APIKEY_CLEAR_BTN, use_container_width=True):
+            if st.button(UI_APIKEY_CLEAR_BTN, width="stretch"):
                 st.session_state.user_api_keys = {}
                 set_session_api_keys({})
                 st_javascript("localStorage.removeItem('ai_council_keys')")
@@ -650,7 +650,7 @@ with st.sidebar:
     if _user:
         # Logged-in state
         st.success(f"✅ {UI_AUTH_LOGGED_IN_AS}: **{_user['email']}**")
-        if st.button(UI_AUTH_LOGOUT_BTN, use_container_width=True):
+        if st.button(UI_AUTH_LOGOUT_BTN, width="stretch"):
             st.session_state.user         = None
             st.session_state.current_results = None
             st.session_state.from_history    = False
@@ -672,7 +672,7 @@ with st.sidebar:
         _password = st.text_input(UI_AUTH_PASSWORD_LABEL, type="password", key="auth_password")
         _btn_label = UI_AUTH_LOGIN_BTN if _auth_mode == UI_AUTH_LOGIN_TAB else UI_AUTH_SIGNUP_BTN
 
-        if st.button(_btn_label, type="primary", use_container_width=True, key="auth_submit"):
+        if st.button(_btn_label, type="primary", width="stretch", key="auth_submit"):
             if not _email.strip() or not _password.strip():
                 st.error("Please enter both email and password.")
             else:
@@ -832,7 +832,7 @@ with st.sidebar:
                 _c1, _c2 = st.columns([3, 1])
                 with _c1:
                     if st.button(btn_label, key=f"hist_{idx}", help=q,
-                                 use_container_width=True):
+                                 width="stretch"):
                         st.session_state.current_results = rs
                         st.session_state.from_history    = True
                         st.rerun()
@@ -849,13 +849,13 @@ with st.sidebar:
                             file_name=_pdf_fname,
                             mime="application/pdf",
                             key=f"hist_pdf_{idx}",
-                            use_container_width=True,
+                            width="stretch",
                         )
                     except Exception:
                         pass
             else:
                 if st.button(btn_label, key=f"hist_{idx}", help=q,
-                             use_container_width=True):
+                             width="stretch"):
                     st.session_state.current_results = rs
                     st.session_state.from_history    = True
                     st.rerun()
@@ -875,7 +875,7 @@ with st.sidebar:
         _render_group(UI_HISTORY_GROUP_OLDER,     _groups["older"])
 
         st.divider()
-        if st.button(UI_HISTORY_CLEAR, use_container_width=True):
+        if st.button(UI_HISTORY_CLEAR, width="stretch"):
             clear_history()
             # Only clear current view if it came from history
             if st.session_state.from_history:
@@ -910,14 +910,14 @@ if not _current_user.get("email_verified", False):
     _id_tok = _current_user.get("id_token", "")
     _vcol1, _vcol2 = st.columns(2)
     with _vcol1:
-        if st.button(UI_RESEND_VERIFICATION, use_container_width=True):
+        if st.button(UI_RESEND_VERIFICATION, width="stretch"):
             _vresult = send_verification_email(_id_tok)
             if _vresult is True:
                 st.success(UI_RESEND_SUCCESS)
             else:
                 st.error(_vresult)
     with _vcol2:
-        if st.button(UI_REFRESH_VERIFY_BTN, use_container_width=True):
+        if st.button(UI_REFRESH_VERIFY_BTN, width="stretch"):
             _vcheck = get_email_verified(_id_tok)
             if _vcheck is True:
                 st.session_state.user["email_verified"] = True
@@ -1073,9 +1073,9 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
     else:
         _cr_col_btn, _cr_col_clear = st.columns([6, 1])
     with _cr_col_btn:
-        _cr_scan = st.button(UI_CODE_REVIEW_SCAN_BTN, use_container_width=True)
+        _cr_scan = st.button(UI_CODE_REVIEW_SCAN_BTN, width="stretch")
     with _cr_col_clear:
-        if st.button(UI_CODE_REVIEW_CLEAR_BTN, use_container_width=True,
+        if st.button(UI_CODE_REVIEW_CLEAR_BTN, width="stretch",
                      disabled=not st.session_state.code_review_context):
             st.session_state.code_review_context  = ""
             st.session_state.code_review_files    = []
@@ -1201,18 +1201,18 @@ if st.session_state.current_results is not None:
     _col_submit, _col_clear = st.columns([3, 1])
     with _col_submit:
         start_button = st.button(
-            UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
+            UI_SUBMIT_BUTTON, type="primary", width="stretch",
             disabled=not _can_submit,
         )
     with _col_clear:
-        if st.button(UI_NEW_QUERY_BUTTON, use_container_width=True, key="new_query_btn"):
+        if st.button(UI_NEW_QUERY_BUTTON, width="stretch", key="new_query_btn"):
             st.session_state.current_results = None
             st.session_state.from_history    = False
             st.session_state._query_counter += 1
             st.rerun()
 else:
     start_button = st.button(
-        UI_SUBMIT_BUTTON, type="primary", use_container_width=True,
+        UI_SUBMIT_BUTTON, type="primary", width="stretch",
         disabled=not _can_submit,
     )
 
@@ -1551,7 +1551,7 @@ def _render_media_panel(results: dict) -> None:
                                 data=img_item["bytes"],
                                 file_name=f"scene_{img_item['image_number']}.png",
                                 mime="image/png",
-                                use_container_width=True,
+                                width="stretch",
                                 key=f"dl_img_s_{qc}_{_cached_n}_{img_item['image_number']}",
                             )
                         if img_item.get("prompt_used"):
@@ -1572,11 +1572,11 @@ def _render_media_panel(results: dict) -> None:
                         data=_cached_img["bytes"],
                         file_name="ai_council_marketing.png",
                         mime="image/png",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_img_{qc}_{_cached_img['gen_n']}",
                     )
                 with regen_col:
-                    if st.button(UI_MEDIA_REGEN_BTN, use_container_width=True,
+                    if st.button(UI_MEDIA_REGEN_BTN, width="stretch",
                                  key=f"regen_img_{qc}_{_cached_img['gen_n']}"):
                         del st.session_state[_img_res_key]
                         st.rerun()
@@ -1587,7 +1587,7 @@ def _render_media_panel(results: dict) -> None:
             if _img_storyboard
             else UI_MEDIA_GENERATE_IMG_BTN
         )
-        if st.button(_img_btn_label, type="primary", use_container_width=True,
+        if st.button(_img_btn_label, type="primary", width="stretch",
                      key=f"gen_img_btn_{qc}"):
             # BYOK: the session-keys ContextVar resets every rerun — re-apply the
             # user's keys here so media generation honours them (not server env).
@@ -1760,7 +1760,7 @@ def _render_media_panel(results: dict) -> None:
                                 data=_s_bytes,
                                 file_name=f"scene_{_s_n}.mp4",
                                 mime="video/mp4",
-                                use_container_width=True,
+                                width="stretch",
                                 key=f"dl_scene_{qc}_{_gen_n}_{_s_n}",
                             )
                     if _s_prom:
@@ -1778,13 +1778,13 @@ def _render_media_panel(results: dict) -> None:
                         data=_cached["bytes"],
                         file_name="ai_council_campaign.mp4",
                         mime="video/mp4",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_vid_{qc}_{_cached['gen_n']}",
                     )
                 with regen_col:
                     if st.button(
                         UI_MEDIA_REGEN_BTN,
-                        use_container_width=True,
+                        width="stretch",
                         key=f"regen_vid_{qc}_{_cached['gen_n']}",
                     ):
                         del st.session_state[_vid_res_key]
@@ -1795,7 +1795,7 @@ def _render_media_panel(results: dict) -> None:
         if st.button(
             _btn_label,
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not _replicate_ok,
             key=f"gen_vid_btn_{qc}",
         ):
@@ -1936,7 +1936,7 @@ def _render_cultural_panel(results: dict) -> None:
         if st.button(
             UI_CULTURAL_GENERATE_BTN,
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not _can_generate,
             key=f"cultural_gen_btn_{qc}",
         ):
@@ -1997,7 +1997,7 @@ def _render_cultural_panel(results: dict) -> None:
                                     data=_bytes,
                                     file_name=f"campaign_{CULTURAL_PROFILES.get(_mkt, {}).get('key', 'market')}.png",
                                     mime="image/png",
-                                    use_container_width=True,
+                                    width="stretch",
                                     key=f"dl_cultural_img_{qc}_{_gen_n}_{_mkt}",
                                 )
                             else:
@@ -2007,7 +2007,7 @@ def _render_cultural_panel(results: dict) -> None:
                                     data=_bytes,
                                     file_name=f"campaign_{CULTURAL_PROFILES.get(_mkt, {}).get('key', 'market')}.mp4",
                                     mime="video/mp4",
-                                    use_container_width=True,
+                                    width="stretch",
                                     key=f"dl_cultural_vid_{qc}_{_gen_n}_{_mkt}",
                                 )
                         if _prom:
@@ -2198,7 +2198,7 @@ def _display_results(results: dict) -> None:
             data=pdf_bytes,
             file_name=filename,
             mime="application/pdf",
-            use_container_width=True,
+            width="stretch",
         )
     except Exception as _err:
         st.caption(f"_PDF export unavailable: {_err}_")
