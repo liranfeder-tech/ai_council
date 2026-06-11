@@ -26,13 +26,14 @@ import contextvars
 import json
 import random
 import re
-import sys
 from datetime import datetime
 from typing import Callable, List, Optional, TypedDict
 
-# Python 3.14+ ThreadPoolExecutor propagates context automatically per task.
-# Earlier versions need explicit copy_context() wrapping.
-_PY314_PLUS = sys.version_info >= (3, 14)
+# NOTE: ThreadPoolExecutor does NOT propagate contextvars to its reused worker
+# threads on ANY CPython version — regular 3.14's thread-inherit behaviour is
+# opt-in only (and applies at thread creation, not per task), so every submit
+# below is wrapped with contextvars.copy_context().run explicitly. This is what
+# carries _ACADEMIC_MODE and the BYOK _SESSION_KEYS into the worker threads.
 
 from glossary import (
     CONTEXTUAL_HALLUCINATION_TRIGGERS,
@@ -166,15 +167,10 @@ def run_stage1_parallel_inference(
     with concurrent.futures.ThreadPoolExecutor(max_workers=total) as executor:
         futures = {}
         for key in active_keys:
-            if _PY314_PLUS:
-                fut = executor.submit(
-                    _fetch_one_answer, key, question, verified_context, images, images_mime
-                )
-            else:
-                _ctx = contextvars.copy_context()
-                fut = executor.submit(
-                    _ctx.run, _fetch_one_answer, key, question, verified_context, images, images_mime
-                )
+            _ctx = contextvars.copy_context()
+            fut = executor.submit(
+                _ctx.run, _fetch_one_answer, key, question, verified_context, images, images_mime
+            )
             futures[fut] = key
 
         for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
@@ -292,17 +288,11 @@ def run_stage2_cross_critique(
         futures = {}
         for reviewer, target in pairs:
             _da = reviewer == devils_advocate_for.get(target)
-            if _PY314_PLUS:
-                fut = executor.submit(
-                    _critique_one, reviewer, target, question, answers, labels,
-                    verified_context, images, images_mime, _da
-                )
-            else:
-                _ctx = contextvars.copy_context()
-                fut = executor.submit(
-                    _ctx.run, _critique_one, reviewer, target, question, answers, labels,
-                    verified_context, images, images_mime, _da
-                )
+            _ctx = contextvars.copy_context()
+            fut = executor.submit(
+                _ctx.run, _critique_one, reviewer, target, question, answers, labels,
+                verified_context, images, images_mime, _da
+            )
             futures[fut] = (reviewer, target)
 
         for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
@@ -596,17 +586,11 @@ def run_stage3_dialectic(
     with concurrent.futures.ThreadPoolExecutor(max_workers=total) as executor:
         futures = {}
         for key in responding:
-            if _PY314_PLUS:
-                fut = executor.submit(
-                    _dialectic_one, key, question, answers.get(key, ""),
-                    critiques_by_target[key], verified_context, images, images_mime,
-                )
-            else:
-                _ctx = contextvars.copy_context()
-                fut = executor.submit(
-                    _ctx.run, _dialectic_one, key, question, answers.get(key, ""),
-                    critiques_by_target[key], verified_context, images, images_mime,
-                )
+            _ctx = contextvars.copy_context()
+            fut = executor.submit(
+                _ctx.run, _dialectic_one, key, question, answers.get(key, ""),
+                critiques_by_target[key], verified_context, images, images_mime,
+            )
             futures[fut] = key
         for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             model_key, response = future.result()
@@ -793,17 +777,11 @@ def run_stage3b_focused_debate(
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
             r1_futures = {}
             for mk in m_keys:
-                if _PY314_PLUS:
-                    fut = ex.submit(
-                        _run_one_debate_round, point, 1, mk, question,
-                        labels, verified_context,
-                    )
-                else:
-                    _ctx = contextvars.copy_context()
-                    fut = ex.submit(
-                        _ctx.run, _run_one_debate_round, point, 1, mk, question,
-                        labels, verified_context,
-                    )
+                _ctx = contextvars.copy_context()
+                fut = ex.submit(
+                    _ctx.run, _run_one_debate_round, point, 1, mk, question,
+                    labels, verified_context,
+                )
                 r1_futures[fut] = mk
             for fut in concurrent.futures.as_completed(r1_futures):
                 p_id, rnd, mk, text = fut.result()
@@ -831,17 +809,11 @@ def run_stage3b_focused_debate(
                     "\n\n".join(_blocks) if _blocks
                     else "_No opposing opening positions were recorded._"
                 )
-                if _PY314_PLUS:
-                    fut = ex.submit(
-                        _run_one_debate_round, point, 2, mk, question,
-                        labels, verified_context, opponent_openings,
-                    )
-                else:
-                    _ctx = contextvars.copy_context()
-                    fut = ex.submit(
-                        _ctx.run, _run_one_debate_round, point, 2, mk, question,
-                        labels, verified_context, opponent_openings,
-                    )
+                _ctx = contextvars.copy_context()
+                fut = ex.submit(
+                    _ctx.run, _run_one_debate_round, point, 2, mk, question,
+                    labels, verified_context, opponent_openings,
+                )
                 r2_futures[fut] = mk
             for fut in concurrent.futures.as_completed(r2_futures):
                 p_id, rnd, mk, text = fut.result()

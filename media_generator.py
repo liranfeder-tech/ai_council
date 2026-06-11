@@ -17,6 +17,7 @@ Add a new entry to VIDEO_MODELS below and the rest of the code picks it up.
 from __future__ import annotations
 
 import base64
+import contextvars
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -503,9 +504,12 @@ def generate_cultural_variants(
         if name in CULTURAL_PROFILES
     ]
 
+    # copy_context per task so the BYOK _SESSION_KEYS ContextVar (ai_factory)
+    # reaches the worker threads — ThreadPoolExecutor never propagates it itself.
     with ThreadPoolExecutor(max_workers=min(max_workers, len(profiles_to_run))) as ex:
         futures = {
             ex.submit(
+                contextvars.copy_context().run,
                 _generate_one_cultural_variant,
                 name, profile,
                 final_answer, campaign_context,
@@ -826,10 +830,11 @@ def generate_image_storyboard(
             "error":        "Claude לא החזיר JSON תקין. נסה שוב.",
         }]
 
-    # Generate all images in parallel
+    # Generate all images in parallel (copy_context per task — see cultural
+    # variants above; carries the BYOK _SESSION_KEYS into the worker threads)
     with ThreadPoolExecutor(max_workers=min(max_workers, len(scenes))) as ex:
         futures = {
-            ex.submit(_generate_one_image, scene, size, style): scene
+            ex.submit(contextvars.copy_context().run, _generate_one_image, scene, size, style): scene
             for scene in scenes
         }
         results_map = {}
