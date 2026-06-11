@@ -163,8 +163,20 @@ _TD_SPLIT = re.compile(
 )
 
 
+# Box-drawing characters (U+2500-U+257F) and common arrows that models use for
+# ASCII-art tables/diagrams. The embedded Assistant font has no glyphs for them
+# (fpdf2 logs "missing glyphs" and renders blanks) — translate to ASCII instead.
+_GLYPH_FALLBACKS: dict[int, str] = {
+    **{cp: "+" for cp in range(0x2500, 0x2580)},   # box drawing: default to "+"
+    **{cp: "-" for cp in (0x2500, 0x2501, 0x2550, 0x254C, 0x254D, 0x2574, 0x2576, 0x2578, 0x257A)},
+    **{cp: "|" for cp in (0x2502, 0x2503, 0x2551, 0x254E, 0x254F, 0x2575, 0x2577, 0x2579, 0x257B)},
+    0x2192: "->", 0x2190: "<-", 0x2191: "^", 0x2193: "v",
+    0x21D2: "=>", 0x21D0: "<=", 0x2194: "<->",
+}
+
+
 def _strip_emoji(text: str) -> str:
-    return _EMOJI_RE.sub("", text)
+    return _EMOJI_RE.sub("", text).translate(_GLYPH_FALLBACKS)
 
 
 def _has_hebrew(text: str) -> bool:

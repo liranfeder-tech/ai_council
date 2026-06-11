@@ -2,6 +2,11 @@
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+# Disable source-file watching: in production code never changes at runtime, and
+# the watcher's `del sys.modules[...]` races with our worker-thread imports and
+# runtime file writes (pdf_cache/, fonts/), crashing live debates with
+# "KeyError: 'logic_engine'" mid-run.
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
