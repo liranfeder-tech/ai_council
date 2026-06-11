@@ -246,6 +246,60 @@ def _multi_cell_rtl(pdf: FPDF, w: float, h: float, logical_text: str, **kwargs) 
 
 
 # ---------------------------------------------------------------------------
+# Markdown pipe-tables → real PDF tables (RTL-aware)
+# ---------------------------------------------------------------------------
+
+def _is_md_table_row(line: str) -> bool:
+    """True for a `| a | b |`-style markdown table row."""
+    s = line.strip()
+    return s.startswith("|") and s.count("|") >= 2
+
+
+def _split_md_row(line: str) -> list:
+    """Split a markdown table row into stripped cell strings."""
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _is_md_table_sep(line: str) -> bool:
+    """True for the `|---|:---:|` separator row under a table header."""
+    if not _is_md_table_row(line):
+        return False
+    cells = _split_md_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c)
+
+
+def _render_md_table(pdf: FPDF, row_lines: list) -> None:
+    """Render a block of markdown table rows as a real bordered PDF table.
+
+    Hebrew-aware: when any cell contains Hebrew the whole table flips to RTL —
+    column order is reversed and every Hebrew cell is bidi-reordered — so the
+    table reads naturally right-to-left. fpdf2's table() handles cell wrapping
+    and page breaks; the Assistant family has a "B" style registered, so the
+    default bold headings row works.
+    """
+    rows = [_split_md_row(ln) for ln in row_lines if not _is_md_table_sep(ln)]
+    rows = [r for r in rows if any(c for c in r)]
+    if not rows:
+        return
+    ncols = max(len(r) for r in rows)
+    rows  = [r + [""] * (ncols - len(r)) for r in rows]
+
+    cleaned = [[_strip_inline_md(_strip_emoji(c)) for c in r] for r in rows]
+    rtl = any(_has_hebrew(c) for r in cleaned for c in r)
+    if rtl:
+        cleaned = [[_bidi(c) for c in r][::-1] for r in cleaned]
+
+    pdf.set_font(pdf._fn, "", 9)
+    with pdf.table(text_align="RIGHT" if rtl else "LEFT") as table:
+        for r in cleaned:
+            row = table.row()
+            for c in r:
+                row.cell(c)
+    pdf.set_font(pdf._fn, "", 11)
+    pdf.ln(2)
+
+
+# ---------------------------------------------------------------------------
 # PDF class with branded header / footer on every page
 # ---------------------------------------------------------------------------
 
@@ -382,24 +436,43 @@ def _render_markdown(pdf: _ReportPDF, text: str) -> None:
         pdf.set_fill_color(245, 245, 245)
         pdf.set_font(pdf._fn, "", 9)
         for cl in code_buf:
-            pdf.multi_cell(0, 5, _strip_emoji(cl), fill=True,
+            # Hebrew inside fenced blocks must still be bidi-reordered per line,
+            # otherwise it renders as mirror writing.
+            txt = _strip_emoji(cl)
+            pdf.multi_cell(0, 5, _bidi(txt), fill=True,
+                           align="R" if _has_hebrew(txt) else "L",
                            new_x="LMARGIN", new_y="NEXT")
         pdf.set_fill_color(255, 255, 255)
         pdf.set_font(pdf._fn, "", 11)
         pdf.ln(2)
         code_buf.clear()
 
-    for line in lines:
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
         if line.startswith("```"):
             if in_code:
                 _flush_code()
             in_code = not in_code
+            i += 1
             continue
 
         if in_code:
             code_buf.append(line)
-        else:
-            _write_md_line(pdf, line)
+            i += 1
+            continue
+
+        # Markdown pipe-table block (header row + |---| separator) → real table
+        if _is_md_table_row(line) and i + 1 < n and _is_md_table_sep(lines[i + 1]):
+            block = []
+            while i < n and _is_md_table_row(lines[i]):
+                block.append(lines[i])
+                i += 1
+            _render_md_table(pdf, block)
+            continue
+
+        _write_md_line(pdf, line)
+        i += 1
 
     if in_code:
         _flush_code()   # close any unclosed fence
@@ -453,13 +526,20 @@ def _render_tech_breakdown_box(pdf: _ReportPDF, text: str) -> None:
         pdf.set_font(pdf._fn, "", 9)
         pdf.set_fill_color(235, 241, 248)
         for cl in code_buf:
-            pdf.multi_cell(0, 5, _strip_emoji(cl), fill=True,
+            # Same per-line bidi as the main code-block renderer (mirror-writing fix).
+            txt = _strip_emoji(cl)
+            pdf.multi_cell(0, 5, _bidi(txt), fill=True,
+                           align="R" if _has_hebrew(txt) else "L",
                            new_x="LMARGIN", new_y="NEXT")
         code_buf.clear()
         pdf.set_fill_color(r_bg, g_bg, b_bg)
         pdf.set_font(pdf._fn, "", 10)
 
-    for line in text.split("\n"):
+    _box_lines = text.split("\n")
+    _bi, _bn = 0, len(_box_lines)
+    while _bi < _bn:
+        line = _box_lines[_bi]
+        _bi += 1
         # Drop the ## Technical Breakdown header itself
         if re.match(r'^##\s*(?:📐\s*)?Technical Breakdown\b', line, re.IGNORECASE):
             continue
@@ -472,6 +552,18 @@ def _render_tech_breakdown_box(pdf: _ReportPDF, text: str) -> None:
             continue
         if in_code:
             code_buf.append(line)
+            continue
+
+        # Markdown pipe-table block → real bordered table (then restore box style)
+        if _is_md_table_row(line) and _bi < _bn and _is_md_table_sep(_box_lines[_bi]):
+            block = [line]
+            while _bi < _bn and _is_md_table_row(_box_lines[_bi]):
+                block.append(_box_lines[_bi])
+                _bi += 1
+            _render_md_table(pdf, block)
+            pdf.set_fill_color(r_bg, g_bg, b_bg)
+            pdf.set_font(pdf._fn, "", 10)
+            pdf.set_text_color(51, 65, 85)
             continue
 
         # Empty line

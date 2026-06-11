@@ -518,6 +518,14 @@ write: "⚠️ No real-time grounding data was available. All numeric claims omi
 
 Do NOT attribute claims to individual models.  Present as a single, \
 authoritative, certified response.
+
+## Formatting rules (the answer renders both on screen and into a PDF)
+- NEVER draw ASCII-art or box-drawing tables (characters like ┌ ─ │ ╔ ═, or \
+"pictures" made of aligned pipes/dashes/plus signs).
+- For any tabular comparison use a STANDARD markdown table: a `| Header | … |` \
+row, then a `|---|---|` separator row, then data rows — nothing else.
+- Use fenced code blocks ONLY for actual source code — never for tables, \
+layouts, timelines, or diagrams.
 """
 
 # ---------------------------------------------------------------------------
@@ -739,6 +747,14 @@ List all academic papers cited from the literature context above, formatted:
   [n] Authors (Year). Title. Journal. URL
 
 Present as a unified report. Do not attribute content to individual models.
+
+## Formatting rules (the report renders both on screen and into a PDF)
+- NEVER draw ASCII-art or box-drawing tables (characters like ┌ ─ │ ╔ ═, or \
+"pictures" made of aligned pipes/dashes/plus signs).
+- For any tabular comparison use a STANDARD markdown table: a `| Header | … |` \
+row, then a `|---|---|` separator row, then data rows — nothing else.
+- Use fenced code blocks ONLY for actual source code — never for tables, \
+layouts, timelines, or diagrams.
 """
 
 # System prompt used by _plan_academic_queries() in academic_search.py.
