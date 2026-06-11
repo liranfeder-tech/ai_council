@@ -34,6 +34,13 @@ load_dotenv()  # טוען את המפתחות מקובץ ה-.env
 
 import streamlit as st
 from streamlit_javascript import st_javascript
+# Streamlit's internal control-flow signals. Verified against the installed
+# Streamlit 1.50.0: both live in streamlit.runtime.scriptrunner and subclass
+# ScriptControlException → BaseException (NOT Exception). A normal
+# `except Exception` therefore does NOT catch them, but we re-raise them
+# explicitly so any future/wrapped variant can never be misreported as a
+# debate failure or swallowed by a callback's `except Exception`.
+from streamlit.runtime.scriptrunner import RerunException, StopException
 from PIL import Image
 
 _LOGO_PATH = Path(__file__).parent / "logo.png"
@@ -97,6 +104,7 @@ from glossary import (
     UI_NO_ANSWER,
     UI_SECTION_CITATIONS,
     UI_SECTION_FINAL,
+    UI_QUESTION_LABEL,
     UI_SECTION_PROCESS,
     UI_SELECT_MODELS,
     UI_SPINNER_STAGE1,
@@ -449,6 +457,21 @@ if "_ls_loaded" not in st.session_state:
     st.session_state._ls_loaded = False    # True once localStorage has been read
 if "_user_loaded" not in st.session_state:
     st.session_state._user_loaded = False  # True once auth localStorage has been read
+
+# ── Interrupted-debate detection (Task 3) ─────────────────────────────────────
+# _debate_running is set True right before a debate's try-block and cleared the
+# instant the results are stashed. If it is still True at the top of a fresh run,
+# a previous debate was killed mid-flight by a page interaction (a rerun/stop was
+# raised inside a progress callback before the results were stashed). The quota is
+# charged only AFTER success, so nothing was charged — reset the flag and warn.
+if "_debate_running" not in st.session_state:
+    st.session_state._debate_running = False
+elif st.session_state._debate_running:
+    st.session_state._debate_running = False
+    st.warning(
+        "⚠️ הדיון הקודם הופסק עקב פעולה בעמוד לפני שהסתיים — לא חויבה מכסה. "
+        "נא להריץ את השאלה מחדש."
+    )
 
 # ---------------------------------------------------------------------------
 # localStorage bridge — load saved API keys into session on first render
@@ -808,7 +831,8 @@ with st.sidebar:
             if _has_pdf:
                 _c1, _c2 = st.columns([3, 1])
                 with _c1:
-                    if st.button(btn_label, key=f"hist_{idx}", use_container_width=True):
+                    if st.button(btn_label, key=f"hist_{idx}", help=q,
+                                 use_container_width=True):
                         st.session_state.current_results = rs
                         st.session_state.from_history    = True
                         st.rerun()
@@ -830,7 +854,8 @@ with st.sidebar:
                     except Exception:
                         pass
             else:
-                if st.button(btn_label, key=f"hist_{idx}", use_container_width=True):
+                if st.button(btn_label, key=f"hist_{idx}", help=q,
+                             use_container_width=True):
                     st.session_state.current_results = rs
                     st.session_state.from_history    = True
                     st.rerun()
@@ -1564,6 +1589,9 @@ def _render_media_panel(results: dict) -> None:
         )
         if st.button(_img_btn_label, type="primary", use_container_width=True,
                      key=f"gen_img_btn_{qc}"):
+            # BYOK: the session-keys ContextVar resets every rerun — re-apply the
+            # user's keys here so media generation honours them (not server env).
+            set_session_api_keys(st.session_state.user_api_keys)
             _n = st.session_state.get(_img_n_key, 0) + 1
             st.session_state[_img_n_key] = _n
 
@@ -1771,6 +1799,9 @@ def _render_media_panel(results: dict) -> None:
             disabled=not _replicate_ok,
             key=f"gen_vid_btn_{qc}",
         ):
+            # BYOK: re-apply the user's keys (ContextVar resets every rerun) so
+            # the prompt-generation calls honour them, not the server env keys.
+            set_session_api_keys(st.session_state.user_api_keys)
             from media_generator import generate_video_storyboard
 
             _n = st.session_state.get(_vid_n_key, 0) + 1
@@ -1909,6 +1940,9 @@ def _render_cultural_panel(results: dict) -> None:
             disabled=not _can_generate,
             key=f"cultural_gen_btn_{qc}",
         ):
+            # BYOK: re-apply the user's keys (ContextVar resets every rerun) so
+            # cultural media generation honours them, not the server env keys.
+            set_session_api_keys(st.session_state.user_api_keys)
             _status = st.status(UI_CULTURAL_GENERATING, expanded=True)
             with _status:
                 for mkt in _selected_markets:
@@ -2028,6 +2062,17 @@ def _display_results(results: dict) -> None:
             "⚠️ חלק מהמודלים נכשלו והדיון רץ בלעדיהם:\n\n" + "\n".join(_part_lines)
         )
 
+    # ── Full question (Task 1) — so an opened entry always carries what was asked.
+    # Plain st.markdown only (user text → never unsafe_allow_html). .get() keeps
+    # old history entries that predate the stored question rendering normally.
+    _q_text = results.get("question", "")
+    if _q_text:
+        if len(_q_text) <= 200:
+            st.markdown(f"> **{UI_QUESTION_LABEL}:** {_q_text}")
+        else:
+            with st.expander(f"{UI_QUESTION_LABEL}: {_q_text[:80]}…", expanded=False):
+                st.markdown(_q_text)
+
     final     = results["final_answer"]
     citations = results.get("citations", [])
 
@@ -2104,6 +2149,20 @@ def _display_results(results: dict) -> None:
     # ── Zero-Trust alert ──────────────────────────────────────────────────────
     if not citations and not final.startswith("ERROR:") and _re.search(r"\d", final):
         st.error(UI_UNVERIFIED_WARNING)
+
+    # ── Convergence early-stop notice (Batch 6) ───────────────────────────────
+    # .get() tolerates old history entries that lack the key.
+    if results.get("converged_early"):
+        st.info("🤝 כל המודלים הסכימו — הדיון התכנס מוקדם ללא מחלוקות")
+
+    # ── Re-verification transparency (Batch 6) ────────────────────────────────
+    # Claims are external-derived text → render with plain st.markdown (NEVER
+    # unsafe_allow_html).  .get() tolerates old entries lacking the key.
+    _reverify_claims = results.get("reverification_claims") or []
+    if _reverify_claims:
+        with st.expander("🔎 אימות מחדש — טענות שנבדקו בחיפוש חי", expanded=False):
+            for _claim in _reverify_claims:
+                st.markdown(f"- {_claim}")
 
     # ── Reliability Dashboard (SVG speedometers) ──────────────────────────────
     dialectic          = results.get("dialectic", {})
@@ -2349,7 +2408,7 @@ if start_button or _fup_question is not None:
                 )
                 if _state["log"]:
                     lines_html = "".join(
-                        f'<div class="sd-log-line">{ln}</div>'
+                        f'<div class="sd-log-line">{html.escape(ln)}</div>'
                         for ln in _state["log"][-12:]
                     )
                     log_ph.markdown(
@@ -2359,6 +2418,8 @@ if start_button or _fup_question is not None:
                         f'</details>',
                         unsafe_allow_html=True,
                     )
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2377,6 +2438,8 @@ if start_button or _fup_question is not None:
                 _refresh_ui()
                 _lbl = "🔍 Stage 0 — Complete" if fraction >= 1.0 else "🔍 Stage 0 — searching …"
                 status.update(label=_lbl)
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2390,6 +2453,8 @@ if start_button or _fup_question is not None:
                 _state["log"].append(f"⚙️ Stage 1 — {text}")
                 _refresh_ui()
                 status.update(label="⚙️ Stage 1 — running …")
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2403,6 +2468,8 @@ if start_button or _fup_question is not None:
                 _state["log"].append(f"🔬 Stage 2 — {text}")
                 _refresh_ui()
                 status.update(label="🔬 Stage 2 — running …")
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2416,6 +2483,8 @@ if start_button or _fup_question is not None:
                 _state["log"].append(f"💬 Stage 3 — {text}")
                 _refresh_ui()
                 status.update(label="💬 Stage 3 — running …")
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2429,6 +2498,8 @@ if start_button or _fup_question is not None:
                 _state["log"].append(f"⚔️ Stage 3b — {text}")
                 _refresh_ui()
                 status.update(label="⚔️ Stage 4 — Focused Debate running …")
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2442,6 +2513,8 @@ if start_button or _fup_question is not None:
                 _state["log"].append(f"🏛️ Stage 5 — {text}")
                 _refresh_ui()
                 status.update(label="🏛️ Stage 5 — Synthesis running …")
+            except (RerunException, StopException):
+                raise   # never swallow Streamlit's rerun/stop control-flow signals
             except Exception:
                 pass
 
@@ -2452,6 +2525,9 @@ if start_button or _fup_question is not None:
         # Wrapped so an unexpected crash (or a user abort) never charges quota
         # and never saves a broken entry to history — the gate above was
         # read-only, so nothing has been consumed yet.
+        # _debate_running marks the in-flight window: if a page interaction kills
+        # the run before the results are stashed, the top-of-script check warns.
+        st.session_state._debate_running = True
         try:
             _live_results = run_council_debate(
                 active_keys=selected_keys,
@@ -2481,6 +2557,12 @@ if start_button or _fup_question is not None:
                 stage4_cb=stage4_cb,
             )
         except Exception as _debate_exc:   # noqa: BLE001
+            # Streamlit's rerun/stop signals subclass BaseException (not Exception)
+            # so they would not be caught here anyway — re-raise explicitly to make
+            # that contract robust against any wrapped/future variant.
+            if isinstance(_debate_exc, (RerunException, StopException)):
+                raise
+            st.session_state._debate_running = False
             status.update(
                 label="❌ מועצת ה-AI נכשלה — אירעה שגיאה בלתי צפויה",
                 state="error",
@@ -2490,6 +2572,19 @@ if start_button or _fup_question is not None:
                 f"לא חויבה מכסה — נסה שוב."
             )
             st.stop()
+
+        # ── Stash the paid results IMMEDIATELY (before any further st.* call) ──
+        # run_council_debate has returned, so the user has been served real work.
+        # Persist it to session state right now — before status.update / PDF /
+        # save_to_history, all of which can yield to a user-triggered rerun — so a
+        # rerun at any later point re-displays these results instead of losing
+        # them. The quota charge intentionally stays below (after success), so a
+        # rerun in this window costs the user nothing. _live_results is mutated
+        # in place later (pdf_cache_path); current_results is the SAME object, so
+        # that mutation is reflected without re-stashing.
+        st.session_state.current_results = _live_results
+        st.session_state.from_history    = False
+        st.session_state._debate_running = False
 
         # ── Final state: reflect success vs. hard failure ─────────────────────
         _debate_failed = bool(_live_results.get("debate_failed"))
@@ -2538,8 +2633,9 @@ if start_button or _fup_question is not None:
         except Exception:
             pass
 
-    st.session_state.current_results = _live_results
-    st.session_state.from_history    = False
+    # current_results / from_history were already stashed immediately after the
+    # debate returned (loss-window fix above); _live_results is the same object,
+    # so the pdf_cache_path mutation above is already reflected. Just re-render.
     st.rerun()
 
 

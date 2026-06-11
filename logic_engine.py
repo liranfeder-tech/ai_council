@@ -25,6 +25,7 @@ import concurrent.futures
 import contextvars
 import json
 import random
+import re
 import sys
 from datetime import datetime
 from typing import Callable, List, Optional, TypedDict
@@ -47,6 +48,7 @@ from glossary import (
     PROMPT_EXTRACT_DISAGREEMENTS,
     PROMPT_DEBATE_OPENING,
     PROMPT_DEBATE_RESPONSE,
+    PROMPT_REVERIFY_QUERIES,
     FOLLOWUP_CONTEXT_BLOCK,
     TEMPORAL_AUTHORITY_CLAUSE_GENERAL,
     UI_STAGE0_COMPLETE_GENERAL,
@@ -65,7 +67,7 @@ from glossary import (
     UI_ACADEMIC_STAGE0_LBL,
 )
 from ai_factory import call_model, call_model_with_citations, _is_error_text
-from search_engine import get_live_market_data, search_is_available
+from search_engine import get_live_market_data, search_is_available, _serper_search
 
 # ---------------------------------------------------------------------------
 # Academic Mode context variable — thread-safe, inherited by child threads
@@ -316,6 +318,176 @@ def run_stage2_cross_critique(
                 )
 
     return critiques
+
+
+# ---------------------------------------------------------------------------
+# Stage 2.4 — Critique verdict parsing  (convergence early-stop)
+# Stage 2.5 — Mid-debate re-verification search (contested-claim grounding)
+# ---------------------------------------------------------------------------
+# These two helpers read the Stage-2 critiques *after* error-filtering and drive
+# Batch-6's two new behaviours:
+#   • _parse_verdict — extract the machine-readable "VERDICT:" line each reviewer
+#     now appends, so the orchestrator can early-stop when all reviewers AGREE.
+#   • _collect_reverify_claims + run_reverification — gather the "RE-VERIFY:" lines
+#     reviewers flag on contested claims, search them live, and format a block
+#     that is appended to the verified context for Stages 3, 3b and 4 ONLY.
+#
+# run_reverification lives here (not in search_engine) because it orchestrates
+# call_model + a glossary prompt + search_engine together, mirroring the other
+# multi-component stage functions in this module; it reuses
+# search_engine._serper_search for the raw HTTP and search_is_available() for the
+# key gate so the Serper plumbing stays in one place.
+
+# Matches the mandatory final "VERDICT: …" line.  Tolerant: case-insensitive,
+# allows leading markdown/bullet/emphasis chars and optional bold around the
+# value, accepts "_" or " " inside the issue labels.  Searched (not anchored) so
+# an inline verdict still parses; the caller takes the LAST match.
+_VERDICT_RE = re.compile(
+    r"(?i)VERDICT\s*:\s*\**\s*(AGREE|MINOR[ _]?ISSUES|MAJOR[ _]?ISSUES)"
+)
+
+# Matches a reviewer's "RE-VERIFY: <claim>" line.  Requires the literal
+# "RE-VERIFY:" token, so the older audit checklist's "RE-VERIFICATION REQUIRED"
+# text never matches.  Multiline + case-insensitive; tolerates leading
+# whitespace / bullet / blockquote markers.
+_REVERIFY_LINE_RE = re.compile(r"(?im)^[ \t>*_\-]*RE-VERIFY\s*:\s*(.+?)\s*$")
+
+
+def _parse_verdict(critique_text: str) -> str:
+    """Parse the machine-readable verdict from one critique.
+
+    Returns one of "AGREE" / "MINOR_ISSUES" / "MAJOR_ISSUES".  The LAST occurrence
+    wins (the prompt puts it on the final line).  A missing, garbled, or
+    error-text critique is treated as MINOR_ISSUES — never AGREE — so a reviewer
+    that forgot the line can never silently converge the debate.
+    """
+    if _is_error_text(critique_text):
+        return "MINOR_ISSUES"
+    matches = _VERDICT_RE.findall(critique_text)
+    if not matches:
+        return "MINOR_ISSUES"
+    raw = matches[-1].upper().replace(" ", "_")
+    if raw == "AGREE":
+        return "AGREE"
+    if raw == "MAJOR_ISSUES":
+        return "MAJOR_ISSUES"
+    return "MINOR_ISSUES"
+
+
+def _collect_reverify_claims(critiques: dict[tuple[str, str], str]) -> List[str]:
+    """Collect, strip and case-insensitively dedupe RE-VERIFY claims (cap 8).
+
+    Scans every (non-error) critique for lines of the exact form
+    ``RE-VERIFY: <claim>``.  Returns at most 8 unique claims in first-seen order.
+    """
+    claims: List[str] = []
+    seen: set = set()
+    for text in critiques.values():
+        if _is_error_text(text):
+            continue
+        for m in _REVERIFY_LINE_RE.finditer(text):
+            claim = m.group(1).strip()
+            if not claim:
+                continue
+            key = claim.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            claims.append(claim)
+            if len(claims) >= 8:
+                return claims
+    return claims
+
+
+def run_reverification(
+    question: str,
+    critiques: dict[tuple[str, str], str],
+) -> tuple[str, List[dict]]:
+    """Re-verify Stage-2 contested claims with a live search.
+
+    Steps
+    -----
+    a. Collect "RE-VERIFY:" claims from the critiques (dedup, cap 8).  None → ("", []).
+    b. Search unavailable → ("", []).
+    c. Ask Gemini Flash (PROMPT_REVERIFY_QUERIES) to turn the claims into 1-5
+       English queries; on planner failure fall back to the claims themselves
+       (first 5) as queries.
+    d. Run the queries through search_engine._serper_search in parallel (num=3
+       each), dedup by URL, keep the top 8 results, and format a STAGE 2.5 block
+       plus Stage-0-style citation dicts.
+    e. Return (block, citations).  Returns ("", []) when nothing is found.
+    """
+    claims = _collect_reverify_claims(critiques)
+    if not claims:
+        return "", []
+    if not search_is_available():
+        return "", []
+
+    # ── Plan queries from the contested claims (fast model) ──────────────────
+    claims_block = "\n".join(f"- {c}" for c in claims)
+    current_date = datetime.now().strftime("%B %Y")
+    prompt = PROMPT_REVERIFY_QUERIES.format(
+        current_date=current_date,
+        question=question[:500],
+        claims_block=claims_block,
+    )
+    raw = call_model("gemini", prompt, [], [])
+    if _is_error_text(raw):
+        # Planner failed — verify the claims verbatim instead.
+        queries = claims[:5]
+    else:
+        queries = [
+            line.strip()
+            for line in raw.strip().splitlines()
+            if line.strip() and len(line.strip()) > 8
+        ][:5]
+        if not queries:
+            queries = claims[:5]
+
+    # ── Run the queries against Serper.dev in parallel ───────────────────────
+    seen_urls: set = set()
+    all_results: List[dict] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(queries), 5)) as ex:
+        for hits in ex.map(lambda q: _serper_search(q, num=3), queries):
+            for hit in hits:
+                url = hit.get("link", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_results.append(hit)
+
+    if not all_results:
+        return "", []
+
+    top = all_results[:8]
+
+    citations: List[dict] = [
+        {"title": r.get("title", r.get("link", "")), "url": r.get("link", "")}
+        for r in top
+        if r.get("link")
+    ]
+
+    lines: List[str] = []
+    for r in top:
+        title   = r.get("title", "")
+        snippet = r.get("snippet", "")
+        url     = r.get("link", "")
+        if snippet:
+            entry = f"* {title}: {snippet}"
+            if url:
+                entry += f" / Source: {url}"
+            lines.append(entry)
+
+    if not lines:
+        return "", []
+
+    block = (
+        "=== STAGE 2.5 — RE-VERIFICATION RESULTS (live search on contested claims) ===\n"
+        + "\n".join(lines)
+        + "\n\nWeigh the contested claims above against these live results: where a "
+        "result confirms or refutes a contested claim, defer to the live result over "
+        "training memory, and treat any claim these results contradict as unverified.\n"
+    )
+    return block, citations
 
 
 # ---------------------------------------------------------------------------
@@ -1005,6 +1177,10 @@ def run_council_debate(
             "failed_models":      failed_models,
             "stage_errors":       stage_errors,
             "debate_failed":      True,
+            "critique_verdicts":      {},
+            "converged_early":        False,
+            "reverification_block":   "",
+            "reverification_claims":  [],
         }
 
     # ── Stage 2: Adversarial Audit ─────────────────────────────────────────
@@ -1023,74 +1199,151 @@ def run_council_debate(
             )
             del critiques[(_rk, _tk)]
 
-    # ── Stage 3: Dialectic Response ────────────────────────────────────────
-    dialectic: dict[str, str] = {}
-    if critiques:
-        dialectic = run_stage3_dialectic(
-            ok_keys, question, ok_answers, critiques, anon_labels, verified_context,
-            images, images_mime, progress_cb=stage3_cb,
-        )
-        # Skip any dialectic response that came back as an error.
-        for _mk in [k for k, v in dialectic.items() if _is_error_text(v)]:
-            stage_errors.append(
-                f"Stage 3: {MODELS[_mk]['label']} dialectic response failed"
-            )
-            del dialectic[_mk]
-
-    # Reliability scores: deduct ONLY for rejecting verified Stage 0 data.
-    #
-    # Honest concession to a valid peer critique is NEVER penalised — it is the
-    # exact intellectually-honest behaviour the dialectic stage mandates, so the
-    # old "retraction" deduction was removed (it punished honesty and rewarded
-    # stubbornness).  The two remaining categories both require live Stage 0
-    # search data to be present:
-    #   1. Contextual Hallucination deductions (-40 each): model reframed the
-    #      actual Stage 0 live search data as hypothetical/unconfirmed.
-    #   2. Hard Hallucination deductions (-50 each): explicit "if Stage 0 is
-    #      correct"-style reframing of live data.
-    # IMPORTANT: these deductions apply ONLY when live search context is present
-    # (broad_block non-empty — real results were retrieved).  When no live data
-    # exists, saying "I cannot verify" is correct behaviour and must NOT be
-    # penalised.
-    reliability_scores: dict[str, int] = {}
-    for key, resp in dialectic.items():
-        # Defensive: a failed dialectic response must never receive a score
-        # (also guards resp.lower() against a None/blank slipping through).
-        if _is_error_text(resp):
-            continue
-        low = resp.lower()
-
-        # Only penalise for rejecting Stage 0 data when live data actually exists.
-        if broad_block:
-            hallucination_hits = sum(
-                1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low
-            )
-            hard_hits = sum(1 for t in HARD_HALLUCINATION_TRIGGERS if t in low)
-        else:
-            hallucination_hits = 0
-            hard_hits          = 0
-
-        reliability_scores[key] = max(
-            0,
-            100 - hallucination_hits * 40 - hard_hits * 50,
-        )
-
-    # ── Stage 3b: Focused Debate ───────────────────────────────────────────
-    # Only the non-master models that survived Stage 1 debate — master mediates.
-    debate_keys = [k for k in ok_keys if k != MASTER_MODEL_KEY]
-    focused_debate = run_stage3b_focused_debate(
-        active_keys=debate_keys,
-        question=question,
-        critiques=critiques,
-        dialectic=dialectic,
-        labels=anon_labels,
-        verified_context=verified_context,
-        progress_cb=stage3b_cb,
+    # ── Stage 2.4: Machine-readable critique verdicts (Batch 6) ────────────
+    # Each surviving critique ends with "VERDICT: AGREE|MINOR_ISSUES|MAJOR_ISSUES".
+    # Parse them (last occurrence wins; missing/garbled → MINOR_ISSUES, still
+    # counted) to drive the convergence early-stop and the per-model micro-skip.
+    # Stored under string keys ("reviewer→target") so the dict is already
+    # JSON-safe and round-trips through history_manager._serialize_results /
+    # _deserialize_results untouched — no tuple-key special-casing needed.
+    _verdict_by_pair: dict[tuple[str, str], str] = {
+        pair: _parse_verdict(text) for pair, text in critiques.items()
+    }
+    critique_verdicts: dict[str, str] = {
+        f"{rk}→{tk}": v for (rk, tk), v in _verdict_by_pair.items()
+    }
+    # Converge only when there is a real vote (>=2 ok models AND at least one
+    # parsed verdict) and EVERY parsed verdict is AGREE.  The bool() guard stops
+    # an empty verdict set (e.g. all critiques errored out) from vacuously
+    # converging the debate.
+    converged_early = (
+        bool(_verdict_by_pair)
+        and len(ok_keys) >= 2
+        and all(v == "AGREE" for v in _verdict_by_pair.values())
     )
+    # Per-model micro-skip: a model whose every RECEIVED critique is AGREE has
+    # nothing to defend, so it is dropped from the Stage-3 dialectic only (it
+    # still participates in Stage 3b and Stage 4 as usual).
+    _received_verdicts: dict[str, List[str]] = {k: [] for k in ok_keys}
+    for (_rk, _tk), _v in _verdict_by_pair.items():
+        if _tk in _received_verdicts:
+            _received_verdicts[_tk].append(_v)
+    _fully_agreed_targets = {
+        k for k, vs in _received_verdicts.items() if vs and all(v == "AGREE" for v in vs)
+    }
+
+    # Additive Batch-6 result keys — defaults cover every skip path below.
+    reverification_block:     str         = ""
+    reverification_claims:    List[str]   = []
+    reverification_citations: List[dict]  = []
+
+    if converged_early:
+        # ── Convergence early-stop ─────────────────────────────────────────
+        # All reviewers AGREED → skip Stage 3 (dialectic), the Stage 2.5
+        # re-verification search, and Stage 3b (focused debate) entirely.
+        # reliability_scores stays {} (the natural no-dialectic result — the UI
+        # already skips the Reliability Dashboard when dialectic is empty), and
+        # Stage 4 synthesises directly from the theses + agreeing critiques.
+        dialectic = {}
+        reliability_scores = {}
+        focused_debate = {"disagreement_points": [], "exchanges": {}, "skipped": True}
+        verified_context_post2 = verified_context
+        if stage3_cb:
+            stage3_cb(1.0, "🤝 Council converged — no disagreements")
+        if stage3b_cb:
+            stage3b_cb(1.0, "🤝 Council converged — no disagreements")
+    else:
+        # ── Stage 2.5: Mid-debate re-verification of contested claims ──────
+        # Reviewers may have flagged factual/numeric/time-sensitive claims with
+        # "RE-VERIFY:" lines.  Search them live and append the results to the
+        # context fed to Stages 3, 3b and 4 ONLY (Stage 1 already ran).  There is
+        # no dedicated Stage-2.5 callback, so reuse stage3_cb at fraction 0.0 —
+        # but only when a search will actually run (claims flagged + key present).
+        _flagged_claims = _collect_reverify_claims(critiques)
+        _will_search    = bool(_flagged_claims) and search_is_available()
+        if _will_search and stage3_cb:
+            stage3_cb(0.0, "🔎 Re-verifying contested claims …")
+        reverification_block, reverification_citations = run_reverification(
+            question, critiques
+        )
+        if reverification_block:
+            reverification_claims  = _flagged_claims
+            verified_context_post2 = verified_context + "\n\n" + reverification_block
+        else:
+            verified_context_post2 = verified_context
+
+        # ── Stage 3: Dialectic Response ────────────────────────────────────
+        dialectic = {}
+        if critiques:
+            # Micro-skip: exclude models whose every received critique is AGREE.
+            _dialectic_keys = [k for k in ok_keys if k not in _fully_agreed_targets]
+            dialectic = run_stage3_dialectic(
+                _dialectic_keys, question, ok_answers, critiques, anon_labels,
+                verified_context_post2, images, images_mime, progress_cb=stage3_cb,
+            )
+            # Skip any dialectic response that came back as an error.
+            for _mk in [k for k, v in dialectic.items() if _is_error_text(v)]:
+                stage_errors.append(
+                    f"Stage 3: {MODELS[_mk]['label']} dialectic response failed"
+                )
+                del dialectic[_mk]
+
+        # Reliability scores: deduct ONLY for rejecting verified Stage 0 data.
+        #
+        # Honest concession to a valid peer critique is NEVER penalised — it is the
+        # exact intellectually-honest behaviour the dialectic stage mandates, so the
+        # old "retraction" deduction was removed (it punished honesty and rewarded
+        # stubbornness).  The two remaining categories both require live Stage 0
+        # search data to be present:
+        #   1. Contextual Hallucination deductions (-40 each): model reframed the
+        #      actual Stage 0 live search data as hypothetical/unconfirmed.
+        #   2. Hard Hallucination deductions (-50 each): explicit "if Stage 0 is
+        #      correct"-style reframing of live data.
+        # IMPORTANT: these deductions apply ONLY when live search context is present
+        # (broad_block non-empty — real results were retrieved).  When no live data
+        # exists, saying "I cannot verify" is correct behaviour and must NOT be
+        # penalised.
+        reliability_scores = {}
+        for key, resp in dialectic.items():
+            # Defensive: a failed dialectic response must never receive a score
+            # (also guards resp.lower() against a None/blank slipping through).
+            if _is_error_text(resp):
+                continue
+            low = resp.lower()
+
+            # Only penalise for rejecting Stage 0 data when live data actually exists.
+            if broad_block:
+                hallucination_hits = sum(
+                    1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low
+                )
+                hard_hits = sum(1 for t in HARD_HALLUCINATION_TRIGGERS if t in low)
+            else:
+                hallucination_hits = 0
+                hard_hits          = 0
+
+            reliability_scores[key] = max(
+                0,
+                100 - hallucination_hits * 40 - hard_hits * 50,
+            )
+
+        # ── Stage 3b: Focused Debate ───────────────────────────────────────
+        # Only the non-master models that survived Stage 1 debate — master mediates.
+        debate_keys = [k for k in ok_keys if k != MASTER_MODEL_KEY]
+        focused_debate = run_stage3b_focused_debate(
+            active_keys=debate_keys,
+            question=question,
+            critiques=critiques,
+            dialectic=dialectic,
+            labels=anon_labels,
+            verified_context=verified_context_post2,
+            progress_cb=stage3b_cb,
+        )
 
     # ── Stage 4: Consensus Synthesis ──────────────────────────────────────
+    # Uses the re-verified context (== verified_context when nothing was
+    # re-verified or when the council converged early).
     final_answer, fallback_used = run_stage4_consensus(
-        question, ok_answers, critiques, dialectic, anon_labels, verified_context,
+        question, ok_answers, critiques, dialectic, anon_labels, verified_context_post2,
         images, images_mime,
         focused_debate=focused_debate,
         progress_cb=stage4_cb,
@@ -1103,10 +1356,10 @@ def run_council_debate(
     if debate_failed:
         stage_errors.append("Stage 4: synthesis failed (master and fallback both errored)")
 
-    # Deduplicate citations from pre-flight search
+    # Deduplicate citations from pre-flight search + Stage 2.5 re-verification.
     seen_urls: set = set()
     citations: List[dict] = []
-    for c in preflight_citations:
+    for c in list(preflight_citations) + reverification_citations:
         if c["url"] not in seen_urls:
             seen_urls.add(c["url"])
             citations.append(c)
@@ -1128,4 +1381,8 @@ def run_council_debate(
         "failed_models":      failed_models,
         "stage_errors":       stage_errors,
         "debate_failed":      debate_failed,
+        "critique_verdicts":      critique_verdicts,
+        "converged_early":        converged_early,
+        "reverification_block":   reverification_block,
+        "reverification_claims":  reverification_claims,
     }

@@ -256,6 +256,23 @@ ignored or underweighted, flag it with: **⚠️ UNADDRESSED VISUAL ASSET DETECT
 and specify what visual evidence was missed.
 
 Format your review with clear markdown headings.
+
+## 🔎 Re-Verification Flags (only when something is genuinely checkable)
+When your review challenges a factual, numeric, or time-sensitive claim whose \
+truth could be settled by a web search, emit ONE line per such claim — at the \
+very END of your review (immediately before the final verdict line) — in EXACTLY \
+this form:
+  RE-VERIFY: <the specific claim, stated neutrally, in English, max 20 words>
+Emit at most 3 such lines, and emit none at all if nothing requires external \
+verification.  These flags must NOT change the structured review above or the \
+Independence rule.
+
+## ✅ Verdict (mandatory final line)
+End your entire review with EXACTLY this line and nothing after it:
+VERDICT: AGREE | MINOR_ISSUES | MAJOR_ISSUES
+  - AGREE         — the answer is essentially correct and complete.
+  - MINOR_ISSUES  — small gaps, nothing that changes the conclusion.
+  - MAJOR_ISSUES  — factual errors, flawed reasoning, or missing essentials that change the conclusion.
 """
 
 # Devil's-advocate role clause — prepended to ONE deterministically-chosen
@@ -598,6 +615,23 @@ not addressed? Missing sub-populations?
 ### 4. Quality Score
 Integer 1–10. Mandatory deduction: −3 points if the specific deliverable was \
 not provided. One sentence of justification.
+
+## 🔎 Re-Verification Flags (only when something is genuinely checkable)
+When your review challenges a factual, numeric, or time-sensitive claim whose \
+truth could be settled by a web search, emit ONE line per such claim — at the \
+very END of your review (immediately before the final verdict line) — in EXACTLY \
+this form:
+  RE-VERIFY: <the specific claim, stated neutrally, in English, max 20 words>
+Emit at most 3 such lines, and emit none at all if nothing requires external \
+verification.  These flags must NOT change the structured review above or the \
+Independence rule.
+
+## ✅ Verdict (mandatory final line)
+End your entire review with EXACTLY this line and nothing after it:
+VERDICT: AGREE | MINOR_ISSUES | MAJOR_ISSUES
+  - AGREE         — the answer is essentially correct and complete.
+  - MINOR_ISSUES  — small gaps, nothing that changes the conclusion.
+  - MAJOR_ISSUES  — factual errors, flawed reasoning, or missing essentials that change the conclusion.
 """
 
 PROMPT_ACADEMIC_DIALECTIC = """\
@@ -895,6 +929,7 @@ SEARCHING_LIVE_DATA_MSG = "🔍 Running pre-flight live market search …"
 UI_SPINNER_STAGE2     = "Running peer review …"
 UI_SPINNER_STAGE3     = "Synthesising the final answer …"
 UI_SECTION_FINAL      = "🏆 Final Synthesised Answer"
+UI_QUESTION_LABEL     = "❓ השאלה"   # shown above the answer so an opened entry always carries its question
 UI_SECTION_PROCESS    = "🔍 Show the full debate transcript"
 UI_EXPANDER_INITIAL   = "📝 {label} — Initial Answer"
 UI_EXPANDER_CRITIQUE  = "🔬 {label} — Critique of {target_label}"
@@ -976,6 +1011,36 @@ background or context, expert analysis, and any opposing view or counter-evidenc
 - Translate Hebrew questions to English before composing queries.
 
 Question: {question}
+"""
+
+# System prompt for Stage 2.5 mid-debate re-verification (logic_engine.run_reverification).
+# A fast model (Gemini Flash) turns the claims that Stage-2 reviewers flagged with
+# "RE-VERIFY:" lines into targeted English Google queries, so the contested claims can
+# be checked against live search results before Stages 3, 3b and 4.
+# Placeholders: {current_date}, {question}, {claims_block} (a "- claim" bullet list).
+# Output format: one query per line, nothing else (1-5 queries).
+PROMPT_REVERIFY_QUERIES = """\
+You are a search-query planner verifying contested claims raised during an AI debate.
+The current date is {current_date}.
+
+--- Original Question ---
+{question}
+
+--- Contested Claims to Verify ---
+{claims_block}
+
+Convert the contested claims above into 1–5 targeted Google search queries that \
+would retrieve the most current, factual evidence needed to confirm or refute them.
+
+Rules:
+- Output ONLY the queries — one per line, nothing else. No numbering, no bullets, \
+no commentary.
+- Write every query in English, even if a claim is in another language.
+- Make each query specific to a claim; prefer queries that return recent, \
+authoritative data (append the current year when the claim is time-sensitive).
+- Output between 1 and 5 queries total.
+
+Queries:
 """
 
 # Phrases in Stage 3 dialectic responses that signal the model REJECTED

@@ -187,8 +187,50 @@ def _strip_inline_md(text: str) -> str:
 
 
 def _clean(text: str) -> str:
-    """Full pipeline: emoji → inline MD → bidi."""
-    return _bidi(_strip_inline_md(_strip_emoji(text)))
+    """Strip emoji + inline Markdown, returning text in LOGICAL order.
+
+    NOTE (Batch 7): bidi (get_display) is intentionally NOT applied here any more.
+    Visual RTL reordering must happen AFTER fpdf2 wraps the text into lines —
+    otherwise get_display() reorders the whole paragraph first and the wrapped
+    LINES come out in reversed order.  All Hebrew-capable call sites now route
+    their _clean()'d content through _multi_cell_rtl(), which wraps first and
+    bidis each resulting line.  Static-English / code / URL sites still call
+    pdf.multi_cell directly (no Hebrew, so no reordering needed).
+    """
+    return _strip_inline_md(_strip_emoji(text))
+
+
+def _multi_cell_rtl(pdf: FPDF, w: float, h: float, logical_text: str, **kwargs) -> None:
+    """multi_cell that preserves logical LINE ORDER for Hebrew / RTL text.
+
+    Non-Hebrew text → thin pass-through to ``pdf.multi_cell`` (unchanged).
+
+    Hebrew text →
+      1. Wrap the LOGICAL text into lines via fpdf2's dry-run
+         (``multi_cell(..., dry_run=True, output="LINES")`` — verified present in
+         fpdf2 2.8.4; returns a list[str] of logical lines and never moves the
+         cursor).
+      2. Apply ``get_display()`` to EACH wrapped line individually.
+      3. Emit each visual line with its own single-line ``multi_cell`` carrying
+         the caller's align/fill/new_x/new_y kwargs.
+    The first printed line is therefore the BEGINNING of the logical paragraph,
+    and a stack of N single-line cells leaves the cursor exactly where one
+    multi_cell block would (same height, same left-margin return, same fill).
+    """
+    if not _has_hebrew(logical_text):
+        pdf.multi_cell(w, h, logical_text, **kwargs)
+        return
+
+    # 1) Wrap LOGICAL text without printing (cursor untouched).
+    logical_lines = pdf.multi_cell(w, h, logical_text, dry_run=True, output="LINES")
+    if not logical_lines:
+        # Defensive: nothing wrapped → single bidi'd write so text is never lost.
+        pdf.multi_cell(w, h, get_display(logical_text), **kwargs)
+        return
+
+    # 2+3) bidi each logical line, print each on its own row.
+    for line in logical_lines:
+        pdf.multi_cell(w, h, get_display(line), **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -257,16 +299,16 @@ def _write_md_line(pdf: _ReportPDF, line: str) -> None:
     # H1
     if line.startswith("# "):
         pdf.set_font(fnb, "B", 16)
-        pdf.multi_cell(0, 9, _clean(line[2:]), align=align,
-                       new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 9, _clean(line[2:]), align=align,
+                        new_x="LMARGIN", new_y="NEXT")
         pdf.set_font(fn, "", 11)
         return
 
     # H2
     if line.startswith("## "):
         pdf.set_font(fnb, "B", 13)
-        pdf.multi_cell(0, 7, _clean(line[3:]), align=align,
-                       new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 7, _clean(line[3:]), align=align,
+                        new_x="LMARGIN", new_y="NEXT")
         pdf.set_font(fn, "", 11)
         return
 
@@ -274,8 +316,8 @@ def _write_md_line(pdf: _ReportPDF, line: str) -> None:
     if re.match(r"^#{3,} ", line):
         depth = len(re.match(r"^(#+)", line).group(1))
         pdf.set_font(fnb, "B", 11)
-        pdf.multi_cell(0, 6, _clean(line[depth + 1:]), align=align,
-                       new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 6, _clean(line[depth + 1:]), align=align,
+                        new_x="LMARGIN", new_y="NEXT")
         pdf.set_font(fn, "", 11)
         return
 
@@ -291,15 +333,15 @@ def _write_md_line(pdf: _ReportPDF, line: str) -> None:
     if re.match(r"^[-*] ", line):
         content = _clean(line[2:])
         bullet  = " \u2022" if rtl else "\u2022 "
-        pdf.multi_cell(0, 6, bullet + content, align=align,
-                       new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 6, bullet + content, align=align,
+                        new_x="LMARGIN", new_y="NEXT")
         return
 
     # Numbered list
     m = re.match(r"^(\d+)\. (.+)", line)
     if m:
-        pdf.multi_cell(0, 6, f"{m.group(1)}. {_clean(m.group(2))}",
-                       align=align, new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 6, f"{m.group(1)}. {_clean(m.group(2))}",
+                        align=align, new_x="LMARGIN", new_y="NEXT")
         return
 
     # Empty line → spacing
@@ -308,8 +350,8 @@ def _write_md_line(pdf: _ReportPDF, line: str) -> None:
         return
 
     # Regular paragraph (multi_cell wraps automatically → handles long text)
-    pdf.multi_cell(0, 6, _clean(line), align=align,
-                   new_x="LMARGIN", new_y="NEXT")
+    _multi_cell_rtl(pdf, 0, 6, _clean(line), align=align,
+                    new_x="LMARGIN", new_y="NEXT")
 
 
 def _render_markdown(pdf: _ReportPDF, text: str) -> None:
@@ -435,8 +477,8 @@ def _render_tech_breakdown_box(pdf: _ReportPDF, text: str) -> None:
             pdf.set_font(pdf._fnb, "B", 10)
             pdf.set_text_color(30, 64, 175)         # blue-800
             fa = "R" if _has_hebrew(formula) else "L"
-            pdf.multi_cell(0, 7, formula, fill=True, align=fa,
-                           new_x="LMARGIN", new_y="NEXT")
+            _multi_cell_rtl(pdf, 0, 7, formula, fill=True, align=fa,
+                            new_x="LMARGIN", new_y="NEXT")
             # Restore box styling
             pdf.set_fill_color(r_bg, g_bg, b_bg)
             pdf.set_font(pdf._fn, "", 10)
@@ -447,8 +489,8 @@ def _render_tech_breakdown_box(pdf: _ReportPDF, text: str) -> None:
         if re.match(r'^#{2,} ', line):
             depth = len(re.match(r'^(#+)', line).group(1))
             pdf.set_font(pdf._fnb, "B", 10)
-            pdf.multi_cell(0, 6, _clean(line[depth + 1:]), fill=True,
-                           align=align, new_x="LMARGIN", new_y="NEXT")
+            _multi_cell_rtl(pdf, 0, 6, _clean(line[depth + 1:]), fill=True,
+                            align=align, new_x="LMARGIN", new_y="NEXT")
             pdf.set_font(pdf._fn, "", 10)
             continue
 
@@ -456,20 +498,20 @@ def _render_tech_breakdown_box(pdf: _ReportPDF, text: str) -> None:
         if re.match(r'^[-*] ', line):
             bullet  = " \u2022" if rtl else "\u2022 "
             content = _clean(line[2:])
-            pdf.multi_cell(0, 6, bullet + content, fill=True,
-                           align=align, new_x="LMARGIN", new_y="NEXT")
+            _multi_cell_rtl(pdf, 0, 6, bullet + content, fill=True,
+                            align=align, new_x="LMARGIN", new_y="NEXT")
             continue
 
         # Numbered list
         m = re.match(r'^(\d+)\. (.+)', line)
         if m:
-            pdf.multi_cell(0, 6, f"{m.group(1)}. {_clean(m.group(2))}", fill=True,
-                           align=align, new_x="LMARGIN", new_y="NEXT")
+            _multi_cell_rtl(pdf, 0, 6, f"{m.group(1)}. {_clean(m.group(2))}", fill=True,
+                            align=align, new_x="LMARGIN", new_y="NEXT")
             continue
 
         # Regular paragraph
-        pdf.multi_cell(0, 6, _clean(line), fill=True,
-                       align=align, new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 6, _clean(line), fill=True,
+                        align=align, new_x="LMARGIN", new_y="NEXT")
 
     if in_code:
         _flush_code_box()
@@ -561,9 +603,9 @@ def generate_pdf(results_dict: dict) -> bytes:
         if not q_line.strip():
             pdf.ln(2)
             continue
-        pdf.multi_cell(0, 7, _clean(q_line),
-                       align="R" if _has_hebrew(q_line) else "L",
-                       new_x="LMARGIN", new_y="NEXT")
+        _multi_cell_rtl(pdf, 0, 7, _clean(q_line),
+                        align="R" if _has_hebrew(q_line) else "L",
+                        new_x="LMARGIN", new_y="NEXT")
     pdf.set_font(fn_regular, "", 11)
 
     # ── Section 2: Final Synthesised Answer ─────────────────────────────────
@@ -611,8 +653,8 @@ def generate_pdf(results_dict: dict) -> bytes:
             url   = c["url"]
 
             pdf.set_font(fn_bold, "B", 10)
-            pdf.multi_cell(0, 6, f"[{i}]  {title}",
-                           new_x="LMARGIN", new_y="NEXT")
+            _multi_cell_rtl(pdf, 0, 6, f"[{i}]  {title}",
+                            new_x="LMARGIN", new_y="NEXT")
             pdf.set_font(fn_regular, "", 9)
             pdf.set_text_color(37, 99, 235)   # blue-600
             pdf.multi_cell(0, 5, f"    {url}",
