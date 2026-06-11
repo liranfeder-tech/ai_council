@@ -426,9 +426,10 @@ Respond directly to the other experts' opening positions in 3-6 sentences.
 
 # Stage 4 — DSAD Consensus Synthesis
 # Mediator reviews the full adversarial transcript (Theses + Audits + Dialectic).
+# Domain-neutral: any live data lives inside {verified_context} (Stage 0 search).
 # Placeholders: {vision_prefix}, {verified_context}, {question},
 #               {all_answers_block}, {all_critiques_block}, {all_dialectic_block},
-#               {focused_debate_block}, {silver_price}, {exchange_rate}
+#               {focused_debate_block}
 COUNCIL_CONSENSUS_PROMPT = """\
 {vision_prefix}{verified_context}You are the impartial Mediator of the AI Council. \
 You are NOT one of the debating agents.  You have observed the complete \
@@ -477,29 +478,12 @@ Replace with: "⚠️ No verified live data found for [topic]."
 Use ONLY Tier 1 and Tier 2 data.  For every topic where only Tier 3 data \
 existed, write the explicit "⚠️ No verified live data" notice.
 
-### Step 4 — Technical Breakdown (only for metal/coin/commodity weight valuations)
-ONLY produce this section if the question involves weighing a physical metal, \
-coin, or commodity and computing its monetary value from weight + spot price. \
-Do NOT produce this section for general financial, investment, geopolitical, \
-or advisory questions.
-
-If applicable, the following Stage 0 values are the ONLY permitted inputs — \
-do NOT substitute training-memory figures:
-
-- **Silver spot price (Stage 0):** {silver_price}
-- **USD/ILS exchange rate (Stage 0):** {exchange_rate}
-
-If both values are "N/A", state that the calculation cannot be performed \
-without live commodity data and omit the section entirely.
-
-Apply this formula only when the above values are real numbers:
-
-> **נוסחת החישוב:**
-> [משקל נקי בגרם] / 31.1 × {silver_price} × {exchange_rate} + [פרמיית אספנות]
-
-Show every arithmetic step explicitly (weight → troy-oz → USD → ILS → \
-+ premium).  End the section with: \
-"✅ Calculation grounded exclusively in Stage 0 live data."
+### Step 4 — Technical Breakdown (only when the question requires a calculation)
+ONLY when the question asks for a numeric result derived from data, show every \
+arithmetic step explicitly.  Use ONLY figures present in the Verified Context \
+Block above — never substitute a training-memory number.  If the required \
+inputs are not in the Verified Context Block, state that the calculation \
+cannot be performed without live data and omit the computation.
 
 ## Output Format
 
@@ -512,8 +496,8 @@ Show every arithmetic step explicitly (weight → troy-oz → USD → ILS → \
 4. **Verification Status** — List every Tier 1 citation with its URL. If none, \
 write: "⚠️ No real-time grounding data was available. All numeric claims omitted."
 5. **Confidence Note** — One paragraph on remaining uncertainties.
-6. **Technical Breakdown** _(only when physical commodity weight valuation \
-is present — see Step 4 above)_
+6. **Technical Breakdown** _(only when the question requires a calculation \
+— see Step 4 above)_
 
 Do NOT attribute claims to individual models.  Present as a single, \
 authoritative, certified response.
@@ -723,6 +707,36 @@ List all academic papers cited from the literature context above, formatted:
 Present as a unified report. Do not attribute content to individual models.
 """
 
+# System prompt used by _plan_academic_queries() in academic_search.py.
+# A fast model turns the research question into BILINGUAL, keyword-style
+# scholarly search queries before hitting OpenAlex / Semantic Scholar / PubMed /
+# Google Scholar.  Placeholders: {current_date}, {question}.
+# Output format: one query per line, each prefixed with a language tag —
+#   "EN: <query>"  (English, always 2-3)
+#   "QL: <query>"  (the question's original language, 1-2, only when non-English)
+ACADEMIC_QUERY_PLAN_PROMPT = """\
+You are a bilingual scholarly search-query planner for an academic literature engine.
+The current date is {current_date}.
+
+STEP 1 — Identify the language of the research question below.
+STEP 2 — Produce 3–5 academic search queries, ONE PER LINE, each prefixed with a \
+language tag:
+  EN: <query>   — an English query. Output 2–3 of these. Keyword-style, 3–8 words, \
+no full sentences, no punctuation beyond spaces.
+  QL: <query>   — a query in the QUESTION'S ORIGINAL language. Output 1–2 of these \
+ONLY when the question is NOT in English; preserve the original script exactly. \
+If the question is already in English, output NO QL lines.
+
+Across the queries, cover complementary angles: the core topic / population, a \
+method or mechanism, and a review / meta-analysis angle (you may append "review" \
+or "meta-analysis").
+
+Output ONLY the tagged query lines — no numbering, no bullets, no commentary, \
+nothing else.
+
+Research question: {question}
+"""
+
 # ---------------------------------------------------------------------------
 # Academic Mode — UI strings (Hebrew)
 # ---------------------------------------------------------------------------
@@ -737,7 +751,10 @@ UI_ACADEMIC_CHECKBOX   = "הפעל מצב מחקר אקדמי"
 UI_ACADEMIC_YEAR_FROM  = "משנת (פרסום)"
 UI_ACADEMIC_YEAR_TO    = "עד שנת (פרסום)"
 UI_ACADEMIC_SEARCHING  = "🔍 מחפש מאמרים עמיתים..."
-UI_ACADEMIC_FOUND      = "📚 נמצאו {n} מאמרים עמיתים — ישמשו כהקשר לדיון האקדמי"
+# {sources} carries the per-source breakdown line from search_academic_papers'
+# notes (e.g. "OpenAlex: 9, Google Scholar: 6, Semantic Scholar: 8, PubMed: 4 —
+# merged 18, kept 12"); kept on one line so stage0_cb can log it as-is.
+UI_ACADEMIC_FOUND      = "📚 נמצאו {n} מאמרים עמיתים ({sources}) — ישמשו כהקשר לדיון האקדמי"
 UI_ACADEMIC_NOT_FOUND  = "📭 לא נמצאו מאמרים עמיתים — הדיון יתבסס על ידע המודלים"
 UI_ACADEMIC_STAGE0_LBL = "Stage 0 — Academic Literature Search"
 
@@ -894,34 +911,12 @@ UI_UNVERIFIED_WARNING = (
 
 # ── Stage 0 injection constants ───────────────────────────────────────────
 # Used in logic_engine.py to build the verified_context block prepended to
-# every model prompt when live market data is detected.
+# every model prompt when live search data was retrieved.
 
-# ── Temporal Authority Clause ──────────────────────────────────────────────
-# Used when Stage 0 found commodity data (silver + ILS).
-# Placeholders: {current_date}, {silver_price}, {exchange_rate}
-TEMPORAL_AUTHORITY_CLAUSE = """\
-╔══════════════════════════════════════════════════════════════════╗
-║      SYSTEM OVERRIDE — TEMPORAL AUTHORITY DECLARATION           ║
-╠══════════════════════════════════════════════════════════════════╣
-║  You are operating on: {current_date}                           ║
-║                                                                  ║
-║  The market figures below are NOT hypothetical.                 ║
-║  They are LIVE, VERIFIED data from Serper.dev —                 ║
-║  retrieved seconds before this session started.                 ║
-║                                                                  ║
-║  Silver spot price  : {silver_price}   ← LIVE — use exclusively ║
-║  USD/ILS rate       : {exchange_rate}  ← LIVE — use exclusively ║
-║                                                                  ║
-║  ⛔ Your training-memory metal prices are OUTDATED.             ║
-║  ⛔ Using training-memory figures = factual error.              ║
-║  ⛔ Calling Stage 0 data "hypothetical", "unconfirmed", or      ║
-║     "assumed" = Contextual Hallucination → score penalty.       ║
-╚══════════════════════════════════════════════════════════════════╝
-"""
-
-# ── General Temporal Authority Clause ─────────────────────────────────────
-# Used when Stage 0 found search results but NO specific commodity values.
-# Anchors the date and surfaces the live search data without a commodity frame.
+# ── Temporal Authority Clause ─────────────────────────────────────────────
+# The sole live-data clause: used whenever Stage 0 returned search results.
+# Anchors today's date and directs every model to treat the search snippets
+# below as the primary grounding source.
 # Placeholders: {current_date}
 TEMPORAL_AUTHORITY_CLAUSE_GENERAL = """\
 ╔══════════════════════════════════════════════════════════════════╗
@@ -940,12 +935,9 @@ TEMPORAL_AUTHORITY_CLAUSE_GENERAL = """\
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
-# Label wrapping the raw Serper.dev output block inside verified_context.
-STAGE0_LIVE_LABEL = "━━━ [LIVE SEARCH DATA — VERIFIED via Serper.dev] ━━━"
-
 # Header injected at the top of the broad research context block that wraps
 # all pre-flight search snippets passed to every model in Stages 1-4.
-# Appears when Stage 0 found relevant results for a non-commodity question.
+# Appears whenever Stage 0 found relevant live results for the question.
 STAGE0_RESEARCH_BLOCK_HEADER = (
     "=== LIVE RESEARCH DATA — Pre-Flight Search (AI-Planned) ===\n"
     "The following results were retrieved live seconds before this debate.\n"
@@ -959,15 +951,18 @@ STAGE0_RESEARCH_BLOCK_FOOTER = "\n\n=== END LIVE RESEARCH DATA ===\n\n"
 # System prompt used by _plan_queries_with_ai() in search_engine.py.
 # Gemini Flash receives this before generating targeted English search queries
 # for any user question.  Kept here so it can be tuned from a single place.
+# Placeholders: {current_date}, {question}.  The model has no inherent knowledge
+# of today's date, so the caller supplies it (e.g. "June 2026").
 STAGE0_QUERY_PLAN_PROMPT = """\
 You are a search-query planner for a research assistant.
+The current date is {current_date}.
 Decide whether the question below benefits from live web search results.
 
 If the question is purely theoretical, mathematical, definitional, or \
 historical (no current facts needed), output exactly:
 NO_SEARCH_NEEDED
 
-Otherwise, output 1–4 Google search queries in English (one per line) that \
+Otherwise, output 2–6 Google search queries in English (one per line) that \
 would retrieve the most current, factual information needed to answer it.
 
 Rules:
@@ -975,18 +970,21 @@ Rules:
 no explanation.
 - Write every query in English, even if the question is in Hebrew.
 - Prefer queries that return recent news or current data \
-(append the year when relevant).
-- Cover different angles: e.g. current status, market data, expert analysis, \
-latest developments.
+(append the current year when relevant).
+- Cover DIFFERENT angles of the question — e.g. current status/facts, \
+background or context, expert analysis, and any opposing view or counter-evidence.
 - Translate Hebrew questions to English before composing queries.
 
 Question: {question}
 """
 
 # Phrases in Stage 3 dialectic responses that signal the model REJECTED
-# Stage 0 live data that was explicitly provided (silver/ILS commodity data).
-# These are only applied when clean_data is non-empty (see logic_engine.py).
+# the live Stage 0 search data that was explicitly provided to it.
+# These are only applied when live search context is present (see
+# logic_engine.py — gated on the Stage 0 broad_block being non-empty).
 # Each match deducts 40 points from the reliability score.
+# Domain-neutral: the phrases target reframing ANY provided live data as
+# hypothetical/unconfirmed (not just prices) — none reference a specific asset.
 # NOTE: generic uncertainty ("cannot verify", "I don't know") is NOT listed
 # here — admitting honest ignorance is correct behaviour, not hallucination.
 CONTEXTUAL_HALLUCINATION_TRIGGERS: tuple = (
@@ -1002,9 +1000,9 @@ CONTEXTUAL_HALLUCINATION_TRIGGERS: tuple = (
     "if the data is accurate",
 )
 
-# Phrases that indicate the model explicitly reframed LIVE Stage 0 commodity
-# data as conditional/hypothetical.  Only applied when clean_data is present.
-# Each match deducts 50 points (hard penalty).
+# Phrases that indicate the model explicitly reframed LIVE Stage 0 search
+# data as conditional/hypothetical.  Only applied when live search context
+# is present (Stage 0 broad_block non-empty).  Each match deducts 50 points.
 HARD_HALLUCINATION_TRIGGERS: tuple = (
     "if the stage 0 price is correct",
     "assuming stage 0 is accurate",
@@ -1087,37 +1085,11 @@ UI_RESEND_VERIFICATION = "📨 שלח מייל אימות מחדש"
 UI_RESEND_SUCCESS      = "✅ מייל אימות נשלח! בדוק את תיבת הדואר שלך."
 UI_REFRESH_VERIFY_BTN  = "🔄 אימתתי — רענן סטטוס"
 UI_STILL_NOT_VERIFIED  = "⚠️ המייל עדיין לא אומת. בדוק את תיבת הדואר ולחץ על הקישור."
-# Shown when commodity data (silver + ILS) was found
-UI_STAGE0_COMPLETE_COMMODITY = "✅ **Stage 0 Complete:** Live Silver: {silver} | USD/ILS: {rate}"
-# Shown when general search results were found (non-commodity query)
+# Shown when general search results were found for the query
 UI_STAGE0_COMPLETE_GENERAL   = "✅ **Stage 0 Complete:** {n} live results fetched for your query"
 # Shown when Serper is unavailable or returned nothing
 UI_STAGE0_COMPLETE_NONE      = "⚠️ **Stage 0:** No live data available (Serper unavailable)"
 
-# Mandatory instruction that follows the live data line.
-# Written to be maximally unambiguous: discard training memory for prices.
-STAGE0_MARKET_INSTRUCTION = (
-    "MANDATORY INSTRUCTION — DO NOT SKIP:\n"
-    "The market figures shown above were retrieved via live web search moments "
-    "before this conversation began.  They reflect the CURRENT real-world values.\n"
-    "Your training data contains OUTDATED price information.  You MUST:\n"
-    "  1. Use the live figures above for EVERY calculation, estimate, and reference.\n"
-    "  2. IGNORE any conflicting prices or exchange rates stored in your training.\n"
-    "  3. Never substitute a training-memory figure for any value already listed above.\n"
-    "Failure to follow this instruction will produce a factually incorrect answer."
-)
-
-# Educational framing prepended when financial/numismatic content is detected.
-# Purpose: prevents GPT-4o content-policy refusals that trigger on direct
-# financial-advice framing, by reframing the task as academic research.
-EDUCATIONAL_FRAMING_NOTE = (
-    "PLATFORM CONTEXT (read before answering):\n"
-    "This is an academic numismatic research and market-education platform. "
-    "All valuations, price analyses, and market data provided here are strictly "
-    "for RESEARCH, EDUCATIONAL, and INFORMATIONAL purposes.  Nothing in this "
-    "conversation constitutes financial, investment, or legal advice.  Treat this "
-    "as a scholarly analysis task, not a financial consultation."
-)
 # ── Stage 3b UI strings ───────────────────────────────────────────────────
 UI_STAGE3B_LABEL          = "Stage 4 — Focused Debate"
 UI_STAGE3B_POINT_HEADER   = "### 🔥 Point {n}: {summary}"

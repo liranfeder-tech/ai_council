@@ -2248,6 +2248,11 @@ _fup_imgs_carry = st.session_state.pop("_pending_followup_imgs", [])
 _fup_mime_carry = st.session_state.pop("_pending_followup_mime", [])
 _fup_data_carry = st.session_state.pop("_pending_followup_data", "")
 _fup_academic   = st.session_state.pop("_pending_followup_academic", False)
+# Academic year range is carried through session state too: the year widgets
+# are keyed by _query_counter, which is bumped on follow-up submission, so the
+# widget state no longer exists on the follow-up run (see submission block).
+_fup_year_from  = st.session_state.pop("_pending_followup_year_from", None)
+_fup_year_to    = st.session_state.pop("_pending_followup_year_to", None)
 
 if start_button or _fup_question is not None:
     # Resolve the effective question and context for this run
@@ -2456,11 +2461,17 @@ if start_button or _fup_question is not None:
                 previous_context=_previous_ctx,
                 code_context=_active_code_ctx,
                 academic_mode=_academic_on_now,
-                year_from=st.session_state.get(
-                    f"academic_year_from_{st.session_state._query_counter}"
+                year_from=(
+                    _fup_year_from if _fup_question is not None
+                    else st.session_state.get(
+                        f"academic_year_from_{st.session_state._query_counter}"
+                    )
                 ),
-                year_to=st.session_state.get(
-                    f"academic_year_to_{st.session_state._query_counter}"
+                year_to=(
+                    _fup_year_to if _fup_question is not None
+                    else st.session_state.get(
+                        f"academic_year_to_{st.session_state._query_counter}"
+                    )
                 ),
                 stage0_cb=stage0_cb,
                 stage1_cb=stage1_cb,
@@ -2635,6 +2646,15 @@ if st.session_state.current_results:
         # Carry academic mode forward so the follow-up uses the same synthesis settings
         st.session_state["_pending_followup_academic"] = st.session_state.get(
             f"academic_mode_{st.session_state._query_counter}", False
+        )
+        # Carry the academic year range too — the year widgets are keyed by the
+        # current _query_counter, which is bumped just below, so their state is
+        # gone on the follow-up run unless we snapshot it here.
+        st.session_state["_pending_followup_year_from"] = st.session_state.get(
+            f"academic_year_from_{st.session_state._query_counter}"
+        )
+        st.session_state["_pending_followup_year_to"] = st.session_state.get(
+            f"academic_year_to_{st.session_state._query_counter}"
         )
         st.session_state.current_results               = None
         st.session_state.from_history                  = False

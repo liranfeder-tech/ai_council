@@ -25,7 +25,6 @@ import concurrent.futures
 import contextvars
 import json
 import random
-import re
 import sys
 from datetime import datetime
 from typing import Callable, List, Optional, TypedDict
@@ -39,7 +38,6 @@ from glossary import (
     HARD_HALLUCINATION_TRIGGERS,
     COUNCIL_CONSENSUS_PROMPT,
     DEVILS_ADVOCATE_CLAUSE,
-    EDUCATIONAL_FRAMING_NOTE,
     FALLBACK_MODEL_KEY,
     MASTER_MODEL_KEY,
     MODELS,
@@ -50,11 +48,7 @@ from glossary import (
     PROMPT_DEBATE_OPENING,
     PROMPT_DEBATE_RESPONSE,
     FOLLOWUP_CONTEXT_BLOCK,
-    STAGE0_LIVE_LABEL,
-    STAGE0_MARKET_INSTRUCTION,
-    TEMPORAL_AUTHORITY_CLAUSE,
     TEMPORAL_AUTHORITY_CLAUSE_GENERAL,
-    UI_STAGE0_COMPLETE_COMMODITY,
     UI_STAGE0_COMPLETE_GENERAL,
     UI_STAGE0_COMPLETE_NONE,
     UI_STAGE0_SEARCHING,
@@ -71,7 +65,7 @@ from glossary import (
     UI_ACADEMIC_STAGE0_LBL,
 )
 from ai_factory import call_model, call_model_with_citations, _is_error_text
-from search_engine import get_live_context, get_live_market_data, search_is_available
+from search_engine import get_live_market_data, search_is_available
 
 # ---------------------------------------------------------------------------
 # Academic Mode context variable — thread-safe, inherited by child threads
@@ -738,8 +732,6 @@ def run_stage4_consensus(
     verified_context: str = "",
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
-    silver_price: str = "N/A",
-    exchange_rate: str = "N/A",
     focused_debate: Optional[dict] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> tuple[str, bool]:
@@ -747,14 +739,8 @@ def run_stage4_consensus(
     The Mediator (Master Model) reads the full DSAD transcript and writes
     the Final Certified Answer.  Falls back to FALLBACK_MODEL_KEY on error.
 
-    Parameters
-    ----------
-    silver_price : str
-        Silver spot price extracted from Stage 0 live data (e.g. "$89.26/oz").
-        Injected directly into the consensus prompt so the Mediator never
-        needs to recall it from training memory.
-    exchange_rate : str
-        USD/ILS exchange rate from Stage 0 (e.g. "3.07").
+    Any live Stage 0 data (search snippets, citations) is already embedded in
+    ``verified_context`` — the consensus prompt is fully domain-neutral.
 
     Returns
     -------
@@ -786,8 +772,6 @@ def run_stage4_consensus(
             all_critiques_block=_format_all_critiques(critiques, labels),
             all_dialectic_block=_format_all_dialectic(dialectic, labels),
             focused_debate_block=_format_focused_debate(focused_debate, labels),
-            silver_price=silver_price,
-            exchange_rate=exchange_rate,
         )
 
     # Claude (MASTER) is always the synthesizer.
@@ -891,45 +875,36 @@ def run_council_debate(
 
     # Academic literature search (runs instead of / alongside standard search)
     academic_papers: list = []
+    academic_notes: List[str] = []   # honest degradation messages → stage_errors
     if academic_mode:
         try:
             from academic_search import search_academic_papers, build_literature_context_block
-            academic_papers = search_academic_papers(question, year_from, year_to, max_results=10)
+            academic_papers, academic_notes = search_academic_papers(
+                question, year_from, year_to, max_results=12
+            )
         except Exception:
             academic_papers = []
+            academic_notes  = []
 
-    clean_data              = get_live_context(question)
     broad_block, preflight_citations = get_live_market_data(question)
 
-    # Extract individual Stage 0 values for:
-    #   a) the Temporal Authority Clause (injected into every prompt)
-    #   b) the Stage 4 consensus formula (passed explicitly to run_stage4_consensus)
-    silver_price  = "N/A"
-    exchange_rate = "N/A"
-    if clean_data:
-        _s = re.search(r'Silver:\s*(\$[\d.]+/oz)', clean_data)
-        _e = re.search(r'USD/ILS:\s*([\d.]+)', clean_data)
-        if _s:
-            silver_price  = _s.group(1)
-        if _e:
-            exchange_rate = _e.group(1)
-
-    # Stage 0 complete — log the live values to the UI
+    # Stage 0 complete — log the live status to the UI
     if stage0_cb:
         if academic_mode:
-            _stage0_msg = (
-                UI_ACADEMIC_FOUND.format(n=len(academic_papers))
-                if academic_papers
-                else UI_ACADEMIC_NOT_FOUND
-            )
-        else:
-            has_commodity_data_early = silver_price != "N/A" or exchange_rate != "N/A"
-            if has_commodity_data_early:
-                _stage0_msg = UI_STAGE0_COMPLETE_COMMODITY.format(
-                    silver=silver_price,
-                    rate=exchange_rate,
+            if academic_papers:
+                # The per-source breakdown is the note containing "merged"/"kept"
+                # (see search_academic_papers); surface it on the Stage-0 line.
+                _src_breakdown = next(
+                    (nt for nt in academic_notes if "merged" in nt and "kept" in nt),
+                    "מקורות מרובים",
                 )
-            elif broad_block:
+                _stage0_msg = UI_ACADEMIC_FOUND.format(
+                    n=len(academic_papers), sources=_src_breakdown
+                )
+            else:
+                _stage0_msg = UI_ACADEMIC_NOT_FOUND
+        else:
+            if broad_block:
                 _n_results = broad_block.count("\n•") or broad_block.count("\n-") or "some"
                 _stage0_msg = UI_STAGE0_COMPLETE_GENERAL.format(n=_n_results)
             else:
@@ -940,38 +915,17 @@ def run_council_debate(
     context_parts: List[str] = []
 
     # Temporal Authority Clause: placed FIRST so it is the first thing every
-    # model reads.  Two variants:
-    #   - Commodity clause (silver+ILS present): enforces live price figures.
-    #   - General clause (search results but no commodity prices): anchors
-    #     the date and directs models to use the search snippets below.
-    has_commodity_data = silver_price != "N/A" or exchange_rate != "N/A"
-
-    if has_commodity_data:
-        context_parts.append(
-            TEMPORAL_AUTHORITY_CLAUSE.format(
-                current_date=current_date,
-                silver_price=silver_price,
-                exchange_rate=exchange_rate,
-            )
-        )
-    elif broad_block:
-        # We have live search results for the question but no commodity prices.
+    # model reads.
+    #   - Live search results present → general clause anchors the date and
+    #     directs every model to use the search snippets below as primary data.
+    #   - No search data → just anchor the date.
+    if broad_block:
         context_parts.append(
             TEMPORAL_AUTHORITY_CLAUSE_GENERAL.format(current_date=current_date)
         )
-    else:
-        # No search data at all — just anchor the date.
-        context_parts.append(f"TODAY'S DATE: {current_date}")
-
-    if has_commodity_data:
-        context_parts.append(
-            f"{STAGE0_LIVE_LABEL}\n{clean_data}\n\n"
-            + STAGE0_MARKET_INSTRUCTION
-            + "\n\n"
-            + EDUCATIONAL_FRAMING_NOTE
-        )
-    if broad_block:
         context_parts.append(broad_block)
+    else:
+        context_parts.append(f"TODAY'S DATE: {current_date}")
 
     # ── Academic literature block (injected when academic_mode is True) ───────
     if academic_papers:
@@ -1014,6 +968,10 @@ def run_council_debate(
     failed_models = {k: v for k, v in answers.items() if _is_error_text(v)}
     ok_keys       = list(ok_answers.keys())
     stage_errors: List[str] = []
+
+    # Surface any Stage 0 academic-search degradations honestly in the UI.
+    if academic_notes:
+        stage_errors.extend(academic_notes)
 
     # ── Per-debate anonymisation map ────────────────────────────────────────
     # Shuffle the surviving models and assign neutral "Expert A/B/C…" labels.
@@ -1084,15 +1042,16 @@ def run_council_debate(
     # Honest concession to a valid peer critique is NEVER penalised — it is the
     # exact intellectually-honest behaviour the dialectic stage mandates, so the
     # old "retraction" deduction was removed (it punished honesty and rewarded
-    # stubbornness).  The two remaining categories both require real commodity
-    # data to be present:
-    #   1. Contextual Hallucination deductions (-40 each): model reframed actual
-    #      Stage 0 commodity data as hypothetical/unconfirmed.
+    # stubbornness).  The two remaining categories both require live Stage 0
+    # search data to be present:
+    #   1. Contextual Hallucination deductions (-40 each): model reframed the
+    #      actual Stage 0 live search data as hypothetical/unconfirmed.
     #   2. Hard Hallucination deductions (-50 each): explicit "if Stage 0 is
     #      correct"-style reframing of live data.
-    # IMPORTANT: these deductions apply ONLY when clean_data is present (real
-    # commodity figures were retrieved).  When no commodity data exists, saying
-    # "I cannot verify" is correct behaviour and must NOT be penalised.
+    # IMPORTANT: these deductions apply ONLY when live search context is present
+    # (broad_block non-empty — real results were retrieved).  When no live data
+    # exists, saying "I cannot verify" is correct behaviour and must NOT be
+    # penalised.
     reliability_scores: dict[str, int] = {}
     for key, resp in dialectic.items():
         # Defensive: a failed dialectic response must never receive a score
@@ -1101,8 +1060,8 @@ def run_council_debate(
             continue
         low = resp.lower()
 
-        # Only penalise for rejecting Stage 0 data when that data actually exists.
-        if clean_data:
+        # Only penalise for rejecting Stage 0 data when live data actually exists.
+        if broad_block:
             hallucination_hits = sum(
                 1 for t in CONTEXTUAL_HALLUCINATION_TRIGGERS if t in low
             )
@@ -1133,8 +1092,6 @@ def run_council_debate(
     final_answer, fallback_used = run_stage4_consensus(
         question, ok_answers, critiques, dialectic, anon_labels, verified_context,
         images, images_mime,
-        silver_price=silver_price,
-        exchange_rate=exchange_rate,
         focused_debate=focused_debate,
         progress_cb=stage4_cb,
     )
