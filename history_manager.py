@@ -122,6 +122,30 @@ def _deserialize_results(data: dict) -> dict:
 # Public API
 # ---------------------------------------------------------------------------
 
+def safe_pdf_cache_path(path_str: str) -> Optional[Path]:
+    """
+    Validate an untrusted cached-PDF path before it is read from disk.
+
+    ``pdf_cache_path`` is stored inside user-writable history (history.json and
+    Firestore docs), so it must never be trusted as a filesystem path. This
+    returns the resolved Path ONLY when it points at a real file located inside
+    PDF_CACHE_DIR — defeating path-traversal reads of arbitrary server files
+    (e.g. a value like "../../firebase_key.json"). Returns None otherwise.
+    """
+    if not path_str:
+        return None
+    try:
+        candidate  = Path(path_str).resolve()
+        cache_root = PDF_CACHE_DIR.resolve()
+        if not candidate.is_relative_to(cache_root):
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
+    except (OSError, ValueError):
+        return None
+
+
 def save_to_history(
     results: dict,
     pdf_bytes: Optional[bytes] = None,
@@ -263,18 +287,21 @@ def get_user_history(uid: str) -> list[dict]:
     return []  # Never expose other users' history as a fallback
 
 
-def check_usage_limit(uid: str) -> tuple[bool, int]:
+def is_within_usage_limit(uid: str) -> tuple[bool, int]:
     """
-    Atomically check and increment the daily query counter for a user.
+    Read-only daily-quota gate: is the user still under the daily cap?
 
     Firestore path: usage_stats/{uid}/daily/{YYYY-MM-DD}
-    Document fields: {"count": int, "uid": str, "date": str}
 
     Returns
     -------
-    (allowed, new_count)
-        allowed   — True when the user is under the daily cap; False when reached.
-        new_count — The counter value after this call (or current value when blocked).
+    (allowed, current_count)
+        allowed       — True when current_count < DAILY_QUERY_LIMIT.
+        current_count — Today's counter value, UNCHANGED (this never writes).
+
+    Pairs with increment_usage(): the app reads this BEFORE a debate to gate
+    access, then calls increment_usage() only AFTER the debate succeeds, so an
+    abort or crash never consumes the user's quota.
 
     Fails open: returns (True, 0) when Firestore is unavailable so the app
     never blocks users due to a cloud connectivity issue.
@@ -285,6 +312,38 @@ def check_usage_limit(uid: str) -> tuple[bool, int]:
 
     today = _date.today().isoformat()
     try:
+        doc = (
+            db.collection("usage_stats")
+            .document(uid)
+            .collection("daily")
+            .document(today)
+            .get()
+        )
+        current = (doc.get("count") or 0) if doc.exists else 0
+        return current < DAILY_QUERY_LIMIT, current
+    except Exception:
+        return True, 0   # fail open — never block on Firestore errors
+
+
+def increment_usage(uid: str) -> int:
+    """
+    Atomically increment today's query counter for a user and return the new count.
+
+    Firestore path: usage_stats/{uid}/daily/{YYYY-MM-DD}
+    Document fields: {"count": int, "uid": str, "date": str}
+
+    Call this ONLY after a debate has actually produced results (success path),
+    so the daily quota is charged on success rather than on submission.
+
+    Fails open: returns 0 when Firestore is unavailable so a cloud outage never
+    crashes the post-debate flow (and never blocks the user).
+    """
+    db = _get_firestore()
+    if db is None:
+        return 0
+
+    today = _date.today().isoformat()
+    try:
         ref = (
             db.collection("usage_stats")
             .document(uid)
@@ -292,20 +351,36 @@ def check_usage_limit(uid: str) -> tuple[bool, int]:
             .document(today)
         )
         doc = ref.get()
-        current = (doc.get("count") or 0) if doc.exists else 0
-
-        if current >= DAILY_QUERY_LIMIT:
-            return False, current
-
         if doc.exists:
+            current = doc.get("count") or 0
             from firebase_admin import firestore as _fs
             ref.update({"count": _fs.Increment(1)})
-        else:
-            ref.set({"count": 1, "uid": uid, "date": today})
-
-        return True, current + 1
+            return current + 1
+        ref.set({"count": 1, "uid": uid, "date": today})
+        return 1
     except Exception:
-        return True, 0   # fail open — never block on Firestore errors
+        return 0   # fail open — never block on Firestore errors
+
+
+def check_usage_limit(uid: str) -> tuple[bool, int]:
+    """
+    Atomically check and increment the daily query counter for a user.
+
+    Now implemented on top of is_within_usage_limit() (the read-only gate) and
+    increment_usage() (the write).  Kept for backward compatibility: callers
+    that still want the old "check-and-charge in one call" semantics get the
+    same (allowed, new_count) contract — increments and returns (True, new_count)
+    when allowed, or (False, current_count) without incrementing when blocked.
+
+    Fails open: returns (True, …) when Firestore is unavailable.
+    """
+    allowed, current = is_within_usage_limit(uid)
+    if not allowed:
+        return False, current
+    new_count = increment_usage(uid)
+    # increment_usage() returns 0 when Firestore is unavailable; preserve the
+    # historical fail-open contract by reporting the optimistic next value.
+    return True, new_count or (current + 1)
 
 
 def get_usage_count(uid: str) -> int:

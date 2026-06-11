@@ -24,6 +24,7 @@ Design notes
 import concurrent.futures
 import contextvars
 import json
+import random
 import re
 import sys
 from datetime import datetime
@@ -37,6 +38,7 @@ from glossary import (
     CONTEXTUAL_HALLUCINATION_TRIGGERS,
     HARD_HALLUCINATION_TRIGGERS,
     COUNCIL_CONSENSUS_PROMPT,
+    DEVILS_ADVOCATE_CLAUSE,
     EDUCATIONAL_FRAMING_NOTE,
     FALLBACK_MODEL_KEY,
     MASTER_MODEL_KEY,
@@ -68,7 +70,7 @@ from glossary import (
     UI_ACADEMIC_NOT_FOUND,
     UI_ACADEMIC_STAGE0_LBL,
 )
-from ai_factory import call_model, call_model_with_citations
+from ai_factory import call_model, call_model_with_citations, _is_error_text
 from search_engine import get_live_context, get_live_market_data, search_is_available
 
 # ---------------------------------------------------------------------------
@@ -186,7 +188,10 @@ def run_stage1_parallel_inference(
 
             if progress_cb:
                 label = MODELS[model_key]["label"]
-                progress_cb(i / total, f"✅ {label} answered ({i}/{total})")
+                if _is_error_text(answer):
+                    progress_cb(i / total, f"❌ {label} failed ({i}/{total})")
+                else:
+                    progress_cb(i / total, f"✅ {label} answered ({i}/{total})")
 
     return answers, citations
 
@@ -198,14 +203,16 @@ def run_stage1_parallel_inference(
 def _build_other_answers_block(
     answers: dict[str, str],
     exclude_key: str,
+    labels: dict[str, str],
 ) -> str:
-    """Format all answers except the one being reviewed into a readable block."""
+    """Format all answers except the one being reviewed into a readable block.
+
+    Iterated in anonymised-label order (Expert A first) so the reviewer cannot
+    infer identity from dict insertion order or from position in the block.
+    """
     lines: List[str] = []
-    for key, text in answers.items():
-        if key == exclude_key:
-            continue
-        label = MODELS[key]["label"]
-        lines.append(f"### {label}\n{text}")
+    for key in sorted((k for k in answers if k != exclude_key), key=lambda k: labels[k]):
+        lines.append(f"### {labels[key]}\n{answers[key]}")
     return "\n\n---\n\n".join(lines) if lines else "_No other answers available._"
 
 
@@ -214,12 +221,18 @@ def _critique_one(
     target_key: str,
     question: str,
     answers: dict[str, str],
+    labels: dict[str, str],
     verified_context: str = "",
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
+    devils_advocate: bool = False,
 ) -> tuple[str, str, str]:
     """
     One model reviews one other model's answer.
+
+    All identities in the prompt are anonymised via *labels* (Expert A/B/C…).
+    When *devils_advocate* is True the DEVIL'S-ADVOCATE clause is prepended so
+    this reviewer argues the strongest opposing case (see run_stage2_cross_critique).
 
     Returns (reviewer_key, target_key, critique_text).
     """
@@ -228,10 +241,12 @@ def _critique_one(
         vision_prefix=_vision_prefix(images),
         verified_context=verified_context,
         question=question,
-        author_label=MODELS[target_key]["label"],
+        author_label=labels[target_key],
         author_answer=answers[target_key],
-        other_answers=_build_other_answers_block(answers, exclude_key=target_key),
+        other_answers=_build_other_answers_block(answers, target_key, labels),
     )
+    if devils_advocate:
+        prompt = DEVILS_ADVOCATE_CLAUSE + prompt
     critique = call_model(reviewer_key, prompt, images, images_mime)
     return reviewer_key, target_key, critique
 
@@ -240,6 +255,7 @@ def run_stage2_cross_critique(
     active_keys: List[str],
     question: str,
     answers: dict[str, str],
+    labels: dict[str, str],
     verified_context: str = "",
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
@@ -247,6 +263,11 @@ def run_stage2_cross_critique(
 ) -> dict[tuple[str, str], str]:
     """
     Each model reviews every other model's answer in parallel.
+
+    Identities in every critique prompt are anonymised via *labels* (Expert A/B/C…).
+    For each target exactly ONE reviewer — the next key after it in the
+    anon-shuffled order, wrapping around — is assigned the rotating devil's-advocate
+    role, so every answer faces at least one deliberately adversarial review.
 
     Returns
     -------
@@ -260,22 +281,31 @@ def run_stage2_cross_critique(
         if reviewer != target
     ]
 
+    # Rotating devil's advocate: walk the anon-shuffled order; the reviewer that
+    # immediately follows each target (wrapping around) argues against it.
+    _ordered = sorted(active_keys, key=lambda k: labels[k])
+    _n = len(_ordered)
+    devils_advocate_for = {
+        _ordered[i]: _ordered[(i + 1) % _n] for i in range(_n)
+    } if _n >= 2 else {}
+
     critiques: dict[tuple[str, str], str] = {}
     total = len(pairs)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(total, 8)) as executor:
         futures = {}
         for reviewer, target in pairs:
+            _da = reviewer == devils_advocate_for.get(target)
             if _PY314_PLUS:
                 fut = executor.submit(
-                    _critique_one, reviewer, target, question, answers,
-                    verified_context, images, images_mime
+                    _critique_one, reviewer, target, question, answers, labels,
+                    verified_context, images, images_mime, _da
                 )
             else:
                 _ctx = contextvars.copy_context()
                 fut = executor.submit(
-                    _ctx.run, _critique_one, reviewer, target, question, answers,
-                    verified_context, images, images_mime
+                    _ctx.run, _critique_one, reviewer, target, question, answers, labels,
+                    verified_context, images, images_mime, _da
                 )
             futures[fut] = (reviewer, target)
 
@@ -298,31 +328,33 @@ def run_stage2_cross_critique(
 # Shared formatters
 # ---------------------------------------------------------------------------
 
-def _format_all_answers(answers: dict[str, str]) -> str:
-    """Render all initial answers into a single text block."""
+def _format_all_answers(answers: dict[str, str], labels: dict[str, str]) -> str:
+    """Render all initial answers into a single text block (anon-label order)."""
     blocks = []
-    for key, text in answers.items():
-        label = MODELS[key]["label"]
-        blocks.append(f"### {label}\n{text}")
+    for key in sorted(answers, key=lambda k: labels[k]):
+        blocks.append(f"### {labels[key]}\n{answers[key]}")
     return "\n\n---\n\n".join(blocks)
 
 
-def _format_all_critiques(critiques: dict[tuple[str, str], str]) -> str:
-    """Render all critiques into a single text block."""
+def _format_all_critiques(
+    critiques: dict[tuple[str, str], str],
+    labels: dict[str, str],
+) -> str:
+    """Render all critiques into a single text block (anon-label order)."""
     blocks = []
-    for (reviewer_key, target_key), text in critiques.items():
-        reviewer_label = MODELS[reviewer_key]["label"]
-        target_label   = MODELS[target_key]["label"]
-        blocks.append(f"### {reviewer_label} → {target_label}\n{text}")
+    for pair in sorted(critiques, key=lambda p: (labels[p[0]], labels[p[1]])):
+        reviewer_key, target_key = pair
+        blocks.append(
+            f"### {labels[reviewer_key]} → {labels[target_key]}\n{critiques[pair]}"
+        )
     return "\n\n---\n\n".join(blocks)
 
 
-def _format_all_dialectic(dialectic: dict[str, str]) -> str:
-    """Render all dialectic responses into a single text block."""
+def _format_all_dialectic(dialectic: dict[str, str], labels: dict[str, str]) -> str:
+    """Render all dialectic responses into a single text block (anon-label order)."""
     blocks = []
-    for key, text in dialectic.items():
-        label = MODELS[key]["label"]
-        blocks.append(f"### {label} — Dialectic Response\n{text}")
+    for key in sorted(dialectic, key=lambda k: labels[k]):
+        blocks.append(f"### {labels[key]} — Dialectic Response\n{dialectic[key]}")
     return "\n\n---\n\n".join(blocks) if blocks else "_No dialectic responses recorded._"
 
 
@@ -363,6 +395,7 @@ def run_stage3_dialectic(
     question: str,
     answers: dict[str, str],
     critiques: dict[tuple[str, str], str],
+    labels: dict[str, str],
     verified_context: str = "",
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
@@ -371,18 +404,19 @@ def run_stage3_dialectic(
     """
     Each model responds to the critiques directed at it in parallel.
 
+    Critique authors in the prompt are anonymised via *labels* (Expert A/B/C…).
+
     Returns
     -------
     dict[str, str]
         Mapping of model_key → dialectic_response_text.
     """
-    # Collect critiques received by each model
+    # Collect critiques received by each model (reviewer shown anonymised)
     critiques_by_target: dict[str, List[str]] = {k: [] for k in active_keys}
     for (reviewer_key, target_key), critique_text in critiques.items():
         if target_key in critiques_by_target:
-            reviewer_label = MODELS[reviewer_key]["label"]
             critiques_by_target[target_key].append(
-                f"**Critique from {reviewer_label}:**\n{critique_text}"
+                f"**Critique from {labels[reviewer_key]}:**\n{critique_text}"
             )
 
     # Only models that actually received critique need to respond
@@ -423,24 +457,34 @@ def run_stage3_dialectic(
 # Stage 3b — Focused Debate
 # ---------------------------------------------------------------------------
 
-def _build_critiques_summary(critiques: dict[tuple[str, str], str]) -> str:
-    """Truncate each critique to first 150 chars for the extraction prompt."""
+def _build_critiques_summary(
+    critiques: dict[tuple[str, str], str],
+    labels: dict[str, str],
+) -> str:
+    """Flatten each critique (anon-labelled, up to 2000 chars) for the extraction prompt.
+
+    Raised from 150 → 2000 chars so the disagreement extractor sees the actual
+    argument, not a truncated opening sentence.  Newlines are flattened to keep
+    one entry per line.
+    """
     lines: List[str] = []
-    for (reviewer_key, target_key), text in critiques.items():
-        reviewer_label = MODELS[reviewer_key]["label"]
-        target_label   = MODELS[target_key]["label"]
-        snippet = text[:150].replace("\n", " ")
-        lines.append(f"{reviewer_label} → {target_label}: {snippet}…")
+    for pair in sorted(critiques, key=lambda p: (labels[p[0]], labels[p[1]])):
+        reviewer_key, target_key = pair
+        snippet = critiques[pair][:2000].replace("\n", " ")
+        lines.append(f"{labels[reviewer_key]} → {labels[target_key]}: {snippet}")
     return "\n".join(lines) if lines else "_No critiques._"
 
 
-def _build_dialectic_summary(dialectic: dict[str, str]) -> str:
-    """Truncate each dialectic response to first 150 chars."""
+def _build_dialectic_summary(dialectic: dict[str, str], labels: dict[str, str]) -> str:
+    """Flatten each FULL dialectic response (anon-labelled, no truncation).
+
+    Passes the complete dialectic text (newlines flattened) so the extractor can
+    see whether a position was actually defended or conceded.
+    """
     lines: List[str] = []
-    for key, text in dialectic.items():
-        label   = MODELS[key]["label"]
-        snippet = text[:150].replace("\n", " ")
-        lines.append(f"{label}: {snippet}…")
+    for key in sorted(dialectic, key=lambda k: labels[k]):
+        snippet = dialectic[key].replace("\n", " ")
+        lines.append(f"{labels[key]}: {snippet}")
     return "\n".join(lines) if lines else "_No dialectic responses._"
 
 
@@ -449,16 +493,26 @@ def _extract_disagreement_points(
     active_keys: List[str],
     critiques: dict[tuple[str, str], str],
     dialectic: dict[str, str],
+    labels: dict[str, str],
 ) -> list[DisagreementPoint]:
     """
     Ask the master model to identify 2-3 genuine disagreement points.
+
+    The model sees only anonymised expert labels (Expert A/B/C…) and returns
+    those labels in an "experts" field; they are mapped back to real model keys
+    here so each stored DisagreementPoint always carries REAL keys in
+    ``model_keys`` (unknown labels are dropped, the >=2 rule is unchanged).
     Returns [] on any error or when models have converged.
     """
+    # Anon labels the model may choose from, plus the reverse map back to keys.
+    available_labels = sorted(labels[k] for k in active_keys)
+    label_to_key     = {labels[k]: k for k in active_keys}
+
     prompt = PROMPT_EXTRACT_DISAGREEMENTS.format(
         question=question,
-        critiques_summary=_build_critiques_summary(critiques),
-        dialectic_summary=_build_dialectic_summary(dialectic),
-        available_keys=str(active_keys),
+        critiques_summary=_build_critiques_summary(critiques, labels),
+        dialectic_summary=_build_dialectic_summary(dialectic, labels),
+        available_labels=str(available_labels),
     )
     raw = call_model(MASTER_MODEL_KEY, prompt)
     if raw.startswith("ERROR:"):
@@ -474,7 +528,11 @@ def _extract_disagreement_points(
             return []
         valid: list[DisagreementPoint] = []
         for p in points:
-            p["model_keys"] = [k for k in p.get("model_keys", []) if k in active_keys]
+            # Map anon labels back to real model keys; drop any unknown label.
+            p["model_keys"] = [
+                label_to_key[lbl] for lbl in p.get("experts", []) if lbl in label_to_key
+            ]
+            p.pop("experts", None)
             if len(p["model_keys"]) >= 2:
                 valid.append(p)
         return valid[:3]
@@ -487,25 +545,32 @@ def _run_one_debate_round(
     round_num: int,
     model_key: str,
     question: str,
-    opponent_opening: str = "",
-    opponent_key: str = "",
+    labels: dict[str, str],
+    verified_context: str = "",
+    opponent_openings: str = "",
 ) -> tuple[int, int, str, str]:
-    """Execute one debate turn. Returns (point_id, round_num, model_key, text)."""
-    your_label = MODELS[model_key]["label"]
+    """Execute one debate turn. Returns (point_id, round_num, model_key, text).
+
+    Round 1 = opening position; round 2 = direct response to the opening
+    positions of EVERY other expert on this point (block built by the caller).
+    Both rounds carry the verified-context block and use anonymised labels.
+    """
+    your_label = labels[model_key]
     if round_num == 1:
         prompt = PROMPT_DEBATE_OPENING.format(
+            verified_context=verified_context,
             your_label=your_label,
             question=question,
             point_summary=point["summary"],
             excerpt=point["excerpt"],
         )
     else:
-        opponent_label = MODELS[opponent_key]["label"] if opponent_key else "opponent"
         prompt = PROMPT_DEBATE_RESPONSE.format(
+            verified_context=verified_context,
             your_label=your_label,
+            question=question,
             point_summary=point["summary"],
-            opponent_label=opponent_label,
-            opponent_opening=opponent_opening,
+            opponent_openings=opponent_openings,
         )
     text = call_model(model_key, prompt)
     return point["point_id"], round_num, model_key, text
@@ -516,16 +581,23 @@ def run_stage3b_focused_debate(
     question: str,
     critiques: dict[tuple[str, str], str],
     dialectic: dict[str, str],
+    labels: dict[str, str],
+    verified_context: str = "",
     progress_cb: Optional[ProgressCallback] = None,
 ) -> dict:
     """
     Identify genuine disagreements after Stage 3 and run focused 2-round exchanges.
 
+    Identities in every debate prompt are anonymised via *labels* (Expert A/B/C…).
+    *verified_context* (the live ground-truth block) is threaded into every round
+    so debaters never lose the verified figures, and in Round 2 each debater
+    answers the opening positions of ALL other experts on the point (not just one).
+
     Returns
     -------
     dict with keys:
-        disagreement_points : list[DisagreementPoint]
-        exchanges           : dict[(point_id, round, model_key), text]
+        disagreement_points : list[DisagreementPoint]   — REAL model keys
+        exchanges           : dict[(point_id, round, model_key), text]  — REAL keys
         skipped             : bool
     """
     empty = {"disagreement_points": [], "exchanges": {}, "skipped": True}
@@ -536,7 +608,7 @@ def run_stage3b_focused_debate(
     if progress_cb:
         progress_cb(0.0, "🔍 Extracting disagreement points …")
 
-    points = _extract_disagreement_points(question, active_keys, critiques, dialectic)
+    points = _extract_disagreement_points(question, active_keys, critiques, dialectic, labels)
 
     if not points:
         if progress_cb:
@@ -556,10 +628,16 @@ def run_stage3b_focused_debate(
             r1_futures = {}
             for mk in m_keys:
                 if _PY314_PLUS:
-                    fut = ex.submit(_run_one_debate_round, point, 1, mk, question)
+                    fut = ex.submit(
+                        _run_one_debate_round, point, 1, mk, question,
+                        labels, verified_context,
+                    )
                 else:
                     _ctx = contextvars.copy_context()
-                    fut = ex.submit(_ctx.run, _run_one_debate_round, point, 1, mk, question)
+                    fut = ex.submit(
+                        _ctx.run, _run_one_debate_round, point, 1, mk, question,
+                        labels, verified_context,
+                    )
                 r1_futures[fut] = mk
             for fut in concurrent.futures.as_completed(r1_futures):
                 p_id, rnd, mk, text = fut.result()
@@ -570,22 +648,33 @@ def run_stage3b_focused_debate(
                     progress_cb(completed / total_rounds,
                                 f"⚔️ {label} — Point {pid} Round 1 done")
 
-        # Round 2 — direct responses (needs Round 1, parallel across models)
+        # Round 2 — direct responses (needs Round 1, parallel across models).
+        # Each debater answers the opening positions of EVERY other expert on
+        # this point — not just one — so 3+-way disagreements are fully engaged.
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(m_keys)) as ex:
             r2_futures = {}
             for mk in m_keys:
-                opponent_key     = next((k for k in m_keys if k != mk), "")
-                opponent_opening = exchanges.get((pid, 1, opponent_key), "")
+                _others = sorted(
+                    (k for k in m_keys if k != mk), key=lambda k: labels[k]
+                )
+                _blocks = [
+                    f"### {labels[k]}\n{exchanges[(pid, 1, k)]}"
+                    for k in _others if exchanges.get((pid, 1, k))
+                ]
+                opponent_openings = (
+                    "\n\n".join(_blocks) if _blocks
+                    else "_No opposing opening positions were recorded._"
+                )
                 if _PY314_PLUS:
                     fut = ex.submit(
                         _run_one_debate_round, point, 2, mk, question,
-                        opponent_opening, opponent_key,
+                        labels, verified_context, opponent_openings,
                     )
                 else:
                     _ctx = contextvars.copy_context()
                     fut = ex.submit(
                         _ctx.run, _run_one_debate_round, point, 2, mk, question,
-                        opponent_opening, opponent_key,
+                        labels, verified_context, opponent_openings,
                     )
                 r2_futures[fut] = mk
             for fut in concurrent.futures.as_completed(r2_futures):
@@ -607,8 +696,14 @@ def run_stage3b_focused_debate(
     }
 
 
-def _format_focused_debate(focused_debate: Optional[dict]) -> str:
-    """Render focused debate exchanges into a readable block for the consensus prompt."""
+def _format_focused_debate(
+    focused_debate: Optional[dict],
+    labels: dict[str, str],
+) -> str:
+    """Render focused debate exchanges into a readable block for the consensus prompt.
+
+    Speakers are shown by anonymised label (Expert A/B/C…) in anon-label order.
+    """
     if not focused_debate or focused_debate.get("skipped", True):
         return "_No focused debate was conducted — models converged after Stage 3._"
     points    = focused_debate.get("disagreement_points", [])
@@ -619,14 +714,13 @@ def _format_focused_debate(focused_debate: Optional[dict]) -> str:
     for point in points:
         pid     = point["point_id"]
         summary = point["summary"]
-        m_keys  = point["model_keys"]
+        m_keys  = sorted(point["model_keys"], key=lambda k: labels[k])
         lines   = [f"### Point {pid}: {summary}"]
         for rnd, rnd_label in [(1, "Opening"), (2, "Response")]:
             for mk in m_keys:
-                text  = exchanges.get((pid, rnd, mk), "")
-                label = MODELS[mk]["label"]
+                text = exchanges.get((pid, rnd, mk), "")
                 if text:
-                    lines.append(f"**{label} — {rnd_label}:**\n{text}")
+                    lines.append(f"**{labels[mk]} — {rnd_label}:**\n{text}")
         blocks.append("\n\n".join(lines))
     return "\n\n---\n\n".join(blocks)
 
@@ -640,6 +734,7 @@ def run_stage4_consensus(
     answers: dict[str, str],
     critiques: dict[tuple[str, str], str],
     dialectic: dict[str, str],
+    labels: dict[str, str],
     verified_context: str = "",
     images: Optional[List[bytes]] = None,
     images_mime: Optional[List[str]] = None,
@@ -677,20 +772,20 @@ def run_stage4_consensus(
             vision_prefix=_vision_prefix(images),
             verified_context=verified_context,
             question=question,
-            all_answers_block=_format_all_answers(answers),
-            all_critiques_block=_format_all_critiques(critiques),
-            all_dialectic_block=_format_all_dialectic(dialectic),
-            focused_debate_block=_format_focused_debate(focused_debate),
+            all_answers_block=_format_all_answers(answers, labels),
+            all_critiques_block=_format_all_critiques(critiques, labels),
+            all_dialectic_block=_format_all_dialectic(dialectic, labels),
+            focused_debate_block=_format_focused_debate(focused_debate, labels),
         )
     else:
         prompt = COUNCIL_CONSENSUS_PROMPT.format(
             vision_prefix=_vision_prefix(images),
             verified_context=verified_context,
             question=question,
-            all_answers_block=_format_all_answers(answers),
-            all_critiques_block=_format_all_critiques(critiques),
-            all_dialectic_block=_format_all_dialectic(dialectic),
-            focused_debate_block=_format_focused_debate(focused_debate),
+            all_answers_block=_format_all_answers(answers, labels),
+            all_critiques_block=_format_all_critiques(critiques, labels),
+            all_dialectic_block=_format_all_dialectic(dialectic, labels),
+            focused_debate_block=_format_focused_debate(focused_debate, labels),
             silver_price=silver_price,
             exchange_rate=exchange_rate,
         )
@@ -911,43 +1006,100 @@ def run_council_debate(
         images, images_mime, progress_cb=stage1_cb,
     )
 
+    # Split successful answers from failures. Failed models leave the debate:
+    # they are never critiqued, never critique others, never debate, and never
+    # appear in the synthesis transcript — but their error text is kept in
+    # failed_models so the UI can show which models dropped out and why.
+    ok_answers    = {k: v for k, v in answers.items() if not _is_error_text(v)}
+    failed_models = {k: v for k, v in answers.items() if _is_error_text(v)}
+    ok_keys       = list(ok_answers.keys())
+    stage_errors: List[str] = []
+
+    # ── Per-debate anonymisation map ────────────────────────────────────────
+    # Shuffle the surviving models and assign neutral "Expert A/B/C…" labels.
+    # These labels are used ONLY inside prompt text sent to the models, to strip
+    # brand identity AND fixed dict-order position bias out of the debate.  The
+    # results dict below keeps REAL model keys everywhere — the UI and saved
+    # history depend on them — so anonymisation never leaks past the prompts.
+    _shuffled = ok_keys.copy()
+    random.shuffle(_shuffled)
+    anon_labels = {key: f"Expert {chr(65 + i)}" for i, key in enumerate(_shuffled)}
+
+    # Every model failed in Stage 1 → no usable answer exists to debate.
+    # Skip Stages 2-4 entirely and return immediately with a hard-failure marker.
+    if not ok_answers:
+        if stage4_cb:
+            stage4_cb(1.0, "❌ All models failed in Stage 1 — no answer produced")
+        return {
+            "question":           question,
+            "answers":            ok_answers,
+            "critiques":          {},
+            "dialectic":          {},
+            "focused_debate":     {"disagreement_points": [], "exchanges": {}, "skipped": True},
+            "reliability_scores": {},
+            "anon_labels":        anon_labels,
+            "final_answer":       "",
+            "fallback_used":      False,
+            "citations":          [],
+            "has_images":         len(images) > 0,
+            "academic_mode":      academic_mode,
+            "academic_papers":    academic_papers,
+            "failed_models":      failed_models,
+            "stage_errors":       stage_errors,
+            "debate_failed":      True,
+        }
+
     # ── Stage 2: Adversarial Audit ─────────────────────────────────────────
+    # Only the models that produced a valid answer participate from here on.
     critiques: dict[tuple[str, str], str] = {}
-    if len(all_keys) >= 2:
+    if len(ok_keys) >= 2:
         critiques = run_stage2_cross_critique(
-            all_keys, question, answers, verified_context,
+            ok_keys, question, ok_answers, anon_labels, verified_context,
             images, images_mime, progress_cb=stage2_cb,
         )
+        # Drop any critique that itself came back as an error, so a failed
+        # critique never poisons Stage 3 or the synthesis transcript.
+        for _rk, _tk in [k for k, v in critiques.items() if _is_error_text(v)]:
+            stage_errors.append(
+                f"Stage 2: {MODELS[_rk]['label']} → {MODELS[_tk]['label']} critique failed"
+            )
+            del critiques[(_rk, _tk)]
 
     # ── Stage 3: Dialectic Response ────────────────────────────────────────
     dialectic: dict[str, str] = {}
     if critiques:
         dialectic = run_stage3_dialectic(
-            all_keys, question, answers, critiques, verified_context,
+            ok_keys, question, ok_answers, critiques, anon_labels, verified_context,
             images, images_mime, progress_cb=stage3_cb,
         )
+        # Skip any dialectic response that came back as an error.
+        for _mk in [k for k, v in dialectic.items() if _is_error_text(v)]:
+            stage_errors.append(
+                f"Stage 3: {MODELS[_mk]['label']} dialectic response failed"
+            )
+            del dialectic[_mk]
 
-    # Reliability scores: two independent deduction categories.
+    # Reliability scores: deduct ONLY for rejecting verified Stage 0 data.
     #
-    # 1. Retraction deductions (-20 each): model changed a correct position
-    #    under peer pressure (normal peer-review behaviour, mild penalty).
-    # 2. Contextual Hallucination deductions (-40 each): model rejected
-    #    actual Stage 0 commodity data as hypothetical/unconfirmed.
-    #    IMPORTANT: these deductions only apply when clean_data is present
-    #    (i.e., real commodity figures were retrieved).  When no commodity
-    #    data exists, saying "I cannot verify" is correct behaviour and must
-    #    NOT be penalised.
-    _RETRACTION_TRIGGERS = (
-        "you are correct", "you're right", "i was wrong", "i acknowledge",
-        "i concede", "i was mistaken", "valid point", "i agree with",
-        "i must retract", "i now agree", "i stand corrected", "i missed",
-        "i overlooked", "correct to point out",
-        "אתה צודק", "טעיתי", "אני מסכים", "הערה נכונה",
-    )
+    # Honest concession to a valid peer critique is NEVER penalised — it is the
+    # exact intellectually-honest behaviour the dialectic stage mandates, so the
+    # old "retraction" deduction was removed (it punished honesty and rewarded
+    # stubbornness).  The two remaining categories both require real commodity
+    # data to be present:
+    #   1. Contextual Hallucination deductions (-40 each): model reframed actual
+    #      Stage 0 commodity data as hypothetical/unconfirmed.
+    #   2. Hard Hallucination deductions (-50 each): explicit "if Stage 0 is
+    #      correct"-style reframing of live data.
+    # IMPORTANT: these deductions apply ONLY when clean_data is present (real
+    # commodity figures were retrieved).  When no commodity data exists, saying
+    # "I cannot verify" is correct behaviour and must NOT be penalised.
     reliability_scores: dict[str, int] = {}
     for key, resp in dialectic.items():
-        low             = resp.lower()
-        retraction_hits = sum(1 for t in _RETRACTION_TRIGGERS if t in low)
+        # Defensive: a failed dialectic response must never receive a score
+        # (also guards resp.lower() against a None/blank slipping through).
+        if _is_error_text(resp):
+            continue
+        low = resp.lower()
 
         # Only penalise for rejecting Stage 0 data when that data actually exists.
         if clean_data:
@@ -961,29 +1113,38 @@ def run_council_debate(
 
         reliability_scores[key] = max(
             0,
-            100 - retraction_hits * 20 - hallucination_hits * 40 - hard_hits * 50,
+            100 - hallucination_hits * 40 - hard_hits * 50,
         )
 
     # ── Stage 3b: Focused Debate ───────────────────────────────────────────
-    # Only the non-master models debate — master stays as mediator
-    debate_keys = [k for k in all_keys if k != MASTER_MODEL_KEY]
+    # Only the non-master models that survived Stage 1 debate — master mediates.
+    debate_keys = [k for k in ok_keys if k != MASTER_MODEL_KEY]
     focused_debate = run_stage3b_focused_debate(
         active_keys=debate_keys,
         question=question,
         critiques=critiques,
         dialectic=dialectic,
+        labels=anon_labels,
+        verified_context=verified_context,
         progress_cb=stage3b_cb,
     )
 
     # ── Stage 4: Consensus Synthesis ──────────────────────────────────────
     final_answer, fallback_used = run_stage4_consensus(
-        question, answers, critiques, dialectic, verified_context,
+        question, ok_answers, critiques, dialectic, anon_labels, verified_context,
         images, images_mime,
         silver_price=silver_price,
         exchange_rate=exchange_rate,
         focused_debate=focused_debate,
         progress_cb=stage4_cb,
     )
+
+    # Stage 4 produced no usable answer (master synthesis AND fallback both
+    # errored) → mark the whole debate as failed so the UI shows an honest
+    # failure instead of dressing up an "ERROR:" string as a certified answer.
+    debate_failed = _is_error_text(final_answer)
+    if debate_failed:
+        stage_errors.append("Stage 4: synthesis failed (master and fallback both errored)")
 
     # Deduplicate citations from pre-flight search
     seen_urls: set = set()
@@ -995,15 +1156,19 @@ def run_council_debate(
 
     return {
         "question":           question,
-        "answers":            answers,
+        "answers":            ok_answers,
         "critiques":          critiques,
         "dialectic":          dialectic,
         "focused_debate":     focused_debate,
         "reliability_scores": reliability_scores,
+        "anon_labels":        anon_labels,
         "final_answer":       final_answer,
         "fallback_used":      fallback_used,
         "citations":          citations,
         "has_images":         len(images) > 0,
         "academic_mode":      academic_mode,
         "academic_papers":    academic_papers,
+        "failed_models":      failed_models,
+        "stage_errors":       stage_errors,
+        "debate_failed":      debate_failed,
     }

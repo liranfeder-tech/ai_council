@@ -6,7 +6,7 @@ Converts a council debate's final answer into an optimised creative brief
 
 Providers
 ---------
-Images : DALL-E 3 via OpenAI   (uses existing OPENAI_API_KEY — no extra sign-up)
+Images : gpt-image-2 via OpenAI   (uses existing OPENAI_API_KEY — no extra sign-up)
 Videos : Replicate              (needs REPLICATE_API_TOKEN from replicate.com)
 
 Adding a new video provider
@@ -26,7 +26,7 @@ import openai
 import requests
 
 # ---------------------------------------------------------------------------
-# Image — DALL-E 3 size presets
+# Image — gpt-image-2 size presets  (all valid non-experimental gpt-image-2 sizes)
 # ---------------------------------------------------------------------------
 
 IMAGE_SIZES: dict[str, str] = {
@@ -78,7 +78,7 @@ _AR_MAP: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Visual style — prompt suffixes and DALL-E style parameter
+# Visual style — prompt suffixes
 # ---------------------------------------------------------------------------
 # Appended to the final prompt *after* Claude's creative brief so the style
 # instruction is always present regardless of what Claude writes.
@@ -92,12 +92,6 @@ _IMG_STYLE_SUFFIX: dict[str, str] = {
         " 2D animated illustration, bold clean outlines, flat vibrant colours, "
         "studio lighting, stylised characters, Disney-Pixar aesthetic."
     ),
-}
-
-# DALL-E 3 accepts "natural" (muted/realistic) or "vivid" (hyper-real/dramatic)
-_DALLE_STYLE_PARAM: dict[str, str] = {
-    "realistic": "natural",
-    "animation": "vivid",
 }
 
 _VID_STYLE_SUFFIX: dict[str, str] = {
@@ -193,7 +187,7 @@ def analyse_reference_images(
 def generate_image_prompt(final_answer: str, campaign_context: str = "", ref_description: str = "") -> str:
     """
     Ask the council's master model to distil the debate answer into an
-    optimised DALL-E 3 image prompt.
+    optimised gpt-image-2 image prompt.
 
     Returns a plain-text English prompt string.
     """
@@ -247,7 +241,7 @@ def generate_video_prompt(
 
 
 # ---------------------------------------------------------------------------
-# Image generation — DALL-E 3
+# Image generation — gpt-image-2
 # ---------------------------------------------------------------------------
 
 def generate_image(
@@ -256,7 +250,7 @@ def generate_image(
     style: str = "realistic",
 ) -> dict:
     """
-    Generate a single marketing image with DALL-E 3.
+    Generate a single marketing image with gpt-image-2.
 
     Parameters
     ----------
@@ -265,14 +259,14 @@ def generate_image(
     size : str
         One of "landscape", "portrait", or "square".
     style : str
-        "realistic" → DALL-E style="natural" + photorealistic suffix.
-        "animation" → DALL-E style="vivid" + animated illustration suffix.
+        "realistic" → photorealistic prompt suffix.
+        "animation" → animated illustration prompt suffix.
 
     Returns
     -------
     dict
         bytes      – raw PNG bytes, or None on failure
-        prompt_used – the prompt DALL-E actually used (may be revised by OpenAI)
+        prompt_used – the prompt sent to gpt-image-2
         error      – error message string, or None on success
     """
     key = _openai_key()
@@ -284,18 +278,15 @@ def generate_image(
         }
 
     size_str   = IMAGE_SIZES.get(size, IMAGE_SIZES["landscape"])
-    dalle_style = _DALLE_STYLE_PARAM.get(style, "natural")
     full_prompt = prompt + _IMG_STYLE_SUFFIX.get(style, "")
 
     try:
         client = openai.OpenAI(api_key=key, timeout=60)
         response = client.images.generate(
-            model="dall-e-3",
+            model="gpt-image-2",
             prompt=full_prompt,
             size=size_str,          # type: ignore[arg-type]
-            quality="hd",
-            style=dalle_style,      # type: ignore[arg-type]
-            response_format="b64_json",
+            quality="high",
             n=1,
         )
         item = response.data[0]
@@ -494,7 +485,7 @@ def generate_cultural_variants(
         Replicate model key (see VIDEO_MODELS).
     max_workers : int
         Number of markets to generate in parallel.
-        Capped at 3 to avoid rate-limit issues with DALL-E / Replicate.
+        Capped at 3 to avoid rate-limit issues with gpt-image-2 / Replicate.
 
     Returns
     -------
@@ -711,7 +702,7 @@ def generate_video_storyboard(
 
 
 # ---------------------------------------------------------------------------
-# Image storyboard — 3-4 DALL-E 3 images that together tell a story
+# Image storyboard — 3-4 gpt-image-2 images that together tell a story
 # ---------------------------------------------------------------------------
 
 def _parse_image_storyboard_json(raw: str) -> list[dict]:
@@ -756,10 +747,10 @@ def generate_image_storyboard(
     max_workers: int = 4,
 ) -> list[dict]:
     """
-    Generate a 3-4 image storyboard with DALL-E 3.
+    Generate a 3-4 image storyboard with gpt-image-2.
 
     Claude writes a scene-by-scene brief (JSON), then all images are
-    generated in parallel via DALL-E 3.
+    generated in parallel via gpt-image-2.
 
     Parameters
     ----------
@@ -778,9 +769,9 @@ def generate_image_storyboard(
     ref_description : str
         Output of analyse_reference_images() — visual context from reference images.
     style : str
-        "realistic" or "animation" — controls DALL-E style param and prompt suffix.
+        "realistic" or "animation" — controls the prompt suffix.
     max_workers : int
-        Parallel DALL-E calls (max 4 to stay within rate limits).
+        Parallel gpt-image-2 calls (max 4 to stay within rate limits).
 
     Returns
     -------

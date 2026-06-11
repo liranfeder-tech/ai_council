@@ -19,12 +19,15 @@ is identical to the text-only path.
 
 import base64
 import os
+import random
+import time
 from contextvars import ContextVar
 from typing import List, Optional
 
 import anthropic
 import openai
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from glossary import API_TIMEOUT_SECONDS, MODELS
@@ -79,6 +82,98 @@ _GEMINI_FIELD_AGENT_INSTRUCTION = (
     "For facts not covered by the block, apply standard Chain-of-Thought reasoning "
     "and flag any time-sensitive claims as potentially outdated."
 )
+
+
+# ---------------------------------------------------------------------------
+# Error-text detection, empty-response normalisation, transient-error retry
+# ---------------------------------------------------------------------------
+
+# Sentinel returned when a provider yields no usable text (e.g. Gemini's
+# response.text is None on a safety block / token exhaustion). _is_error_text
+# treats it as an error so a blank answer never poisons the downstream debate.
+_EMPTY_RESPONSE_ERROR = "ERROR: empty response from model"
+
+# Retry policy for transient API failures: 1 initial attempt + up to 2 retries.
+_RETRY_MAX_ATTEMPTS    = 3
+_RETRY_BACKOFF_SECONDS = (2.0, 4.0)   # sleep before retry #1, then before retry #2
+
+
+def _is_error_text(text) -> bool:
+    """
+    True when *text* is unusable as a model answer: None, blank/whitespace, or a
+    provider error string (one starting with "ERROR:").
+
+    Imported by logic_engine and search_engine to filter failed responses out of
+    the debate before they can be critiqued, scored, web-searched, or synthesised.
+    """
+    if text is None:
+        return True
+    if not isinstance(text, str):
+        return False
+    stripped = text.strip()
+    return stripped == "" or stripped.startswith("ERROR:")
+
+
+def _normalize_text(text: Optional[str]) -> str:
+    """Map a None / blank provider response to the visible ERROR sentinel."""
+    if text is None or not str(text).strip():
+        return _EMPTY_RESPONSE_ERROR
+    return text
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """
+    Classify an SDK exception as transient (worth retrying) or permanent.
+
+    Transient → rate limits (429), overload (529), server errors (>=500),
+    request timeouts and connection errors, across anthropic / openai /
+    google.genai.  Permanent → 400/401/403/404 (bad request, auth, permission,
+    not-found) are never retried.
+
+    Verified against the installed SDKs (anthropic 0.84.0, openai 2.26.0,
+    google-genai): typed classes are matched directly; anything else is judged
+    by its HTTP status attribute (anthropic/openai instances expose
+    `status_code`; google.genai's APIError exposes `code`).  anthropic 0.84.0
+    has no typed Overloaded(529) class, so a 529 arrives as a plain
+    APIStatusError and is caught by the status-code check below.
+    """
+    # Connection-level failures (timeouts, dropped sockets) — transient everywhere.
+    if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError,
+                        openai.APITimeoutError, openai.APIConnectionError)):
+        return True
+    # Typed rate-limit (429) and server (>=500) errors.
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.InternalServerError,
+                        openai.RateLimitError, openai.InternalServerError,
+                        genai_errors.ServerError)):
+        return True
+    # Status-code fallback — covers anthropic 529 "overloaded" (no typed class)
+    # and google.genai ClientError 429 (a ClientError that isn't a 429 is permanent).
+    code = getattr(exc, "status_code", None)
+    if not isinstance(code, int) and isinstance(exc, genai_errors.APIError):
+        code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code == 429 or code == 529 or code >= 500
+    return False
+
+
+def _call_with_retry(provider_fn, *args, **kwargs):
+    """
+    Call a provider helper, retrying up to 2 extra times on transient API errors.
+
+    Backoff is 2 s then 4 s, each with 0–1 s random jitter to de-synchronise the
+    parallel Stage-1/Stage-2 calls.  Non-transient errors (and the final attempt)
+    re-raise immediately, so the caller's existing except-block turns them into an
+    "ERROR: …" string.  With API_TIMEOUT_SECONDS=150 per attempt the worst case
+    stays bounded (3 attempts + ~6 s backoff).
+    """
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return provider_fn(*args, **kwargs)
+        except Exception as exc:                                    # noqa: BLE001
+            is_last_attempt = attempt >= _RETRY_MAX_ATTEMPTS - 1
+            if is_last_attempt or not _is_transient_error(exc):
+                raise
+            time.sleep(_RETRY_BACKOFF_SECONDS[attempt] + random.uniform(0.0, 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +379,7 @@ def validate_api_key(provider: str, api_key: str) -> tuple[bool, str]:
                 http_options=genai_types.HttpOptions(timeout=10_000),
             )
             c.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.5-flash-lite",
                 contents="hi",
                 config=genai_types.GenerateContentConfig(max_output_tokens=1),
             )
@@ -296,7 +391,7 @@ def validate_api_key(provider: str, api_key: str) -> tuple[bool, str]:
                 timeout=10,
             )
             c.chat.completions.create(
-                model="grok-3",
+                model="grok-4.3",
                 max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
             )
@@ -346,13 +441,22 @@ def call_model_with_citations(
 
     try:
         if provider == "google":
-            return _call_google(model_id, prompt, images, images_mime, max_tokens, request_timeout)
+            text, citations = _call_with_retry(
+                _call_google, model_id, prompt, images, images_mime, max_tokens, request_timeout
+            )
+            return _normalize_text(text), citations
         elif provider == "anthropic":
-            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens, request_timeout), []
+            return _normalize_text(_call_with_retry(
+                _call_anthropic, model_id, prompt, images, images_mime, max_tokens, request_timeout
+            )), []
         elif provider == "openai":
-            return _call_openai(model_id, prompt, images, images_mime, max_tokens), []
+            return _normalize_text(_call_with_retry(
+                _call_openai, model_id, prompt, images, images_mime, max_tokens
+            )), []
         elif provider == "xai":
-            return _call_xai(model_id, prompt, images, images_mime, max_tokens), []
+            return _normalize_text(_call_with_retry(
+                _call_xai, model_id, prompt, images, images_mime, max_tokens
+            )), []
         else:
             return f"ERROR: Unsupported provider '{provider}' for model '{model_key}'.", []
 
@@ -403,17 +507,26 @@ def call_model(
 
     try:
         if provider == "anthropic":
-            return _call_anthropic(model_id, prompt, images, images_mime, max_tokens)
+            return _normalize_text(_call_with_retry(
+                _call_anthropic, model_id, prompt, images, images_mime, max_tokens
+            ))
 
         elif provider == "openai":
-            return _call_openai(model_id, prompt, images, images_mime, max_tokens)
+            return _normalize_text(_call_with_retry(
+                _call_openai, model_id, prompt, images, images_mime, max_tokens
+            ))
 
         elif provider == "xai":
-            return _call_xai(model_id, prompt, images, images_mime, max_tokens)
+            return _normalize_text(_call_with_retry(
+                _call_xai, model_id, prompt, images, images_mime, max_tokens
+            ))
 
         elif provider == "google":
-            text, citations = _call_google(model_id, prompt, images, images_mime, max_tokens)
-            if citations:
+            text, citations = _call_with_retry(
+                _call_google, model_id, prompt, images, images_mime, max_tokens
+            )
+            text = _normalize_text(text)
+            if citations and not _is_error_text(text):
                 footer = "\n".join(f"- [{c['title']}]({c['url']})" for c in citations)
                 text += f"\n\n---\n**Grounding sources (Google Search)**\n{footer}"
             return text

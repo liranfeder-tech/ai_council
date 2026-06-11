@@ -547,7 +547,7 @@ def generate_pdf(results_dict: dict) -> bytes:
         pdf.multi_cell(
             0, 6,
             "Note: The primary synthesis model failed. "
-            "Gemini 3 Pro was used as fallback.",
+            "Gemini 3.1 Pro was used as fallback.",
             fill=True, new_x="LMARGIN", new_y="NEXT",
         )
         pdf.set_fill_color(255, 255, 255)

@@ -351,9 +351,15 @@ def _plan_queries_with_ai(question: str) -> List[str]:
     if not search_is_available():
         return []
     try:
-        from ai_factory import call_model        # local import avoids circular dep at module load
+        # local import avoids circular dep at module load
+        from ai_factory import call_model, _is_error_text
         prompt = STAGE0_QUERY_PLAN_PROMPT.format(question=question[:500])
         raw = call_model("gemini", prompt, [], [])
+        # A failed planner call returns an "ERROR: …" string (or, pre-Batch-2,
+        # None). Never feed that into Serper as a live query — fall back to the
+        # non-AI path (return []; get_live_market_data then uses keyword queries).
+        if _is_error_text(raw):
+            return []
         if "NO_SEARCH_NEEDED" in raw.upper():
             return []
         queries = [

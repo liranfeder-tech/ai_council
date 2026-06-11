@@ -21,7 +21,7 @@ MASTER_MODEL_KEY = "claude"
 # Fallback model used in Stage 3 if the Master Model fails.
 # Must be a key in MODELS.
 FALLBACK_MODEL_KEY = "gemini_pro"
-FALLBACK_MODEL_ID  = "gemini-3-pro-preview"   # human-readable reference / logging
+FALLBACK_MODEL_ID  = "gemini-3.1-pro-preview"   # human-readable reference / logging
 
 
 # ---------------------------------------------------------------------------
@@ -51,21 +51,21 @@ MODELS = {
         "color":    "#10B981",   # emerald
     },
     "gemini": {
-        "id":       "gemini-3-flash-preview",
-        "label":    "Gemini 3 Flash (Google)",
+        "id":       "gemini-3.5-flash",
+        "label":    "Gemini 3.5 Flash (Google)",
         "provider": "google",
         "color":    "#3B82F6",   # blue
     },
-    # Dedicated entry for the Gemini 3 Pro fallback / master synthesis model
+    # Dedicated entry for the Gemini 3.1 Pro fallback / master synthesis model
     "gemini_pro": {
-        "id":       "gemini-3-pro-preview",
-        "label":    "Gemini 3 Pro (Google)",
+        "id":       "gemini-3.1-pro-preview",
+        "label":    "Gemini 3.1 Pro (Google)",
         "provider": "google",
         "color":    "#6366F1",   # indigo
     },
     "grok": {
-        "id":       "grok-3",
-        "label":    "Grok 3 (xAI)",
+        "id":       "grok-4.3",
+        "label":    "Grok 4.3 (xAI)",
         "provider": "xai",
         "color":    "#EF4444",   # red
     },
@@ -144,6 +144,11 @@ Provide a clear, structured final answer.  Use markdown headers, bullet \
 points, and code blocks where helpful.  Be explicit about what is \
 well-established fact versus what may have changed recently.
 
+## 📊 Step 5 — Confidence
+End your entire response with exactly these two lines and nothing after them:
+CONFIDENCE: <a single integer from 0 to 100 — your confidence in the Final Answer>
+Most likely to change my mind: <one sentence naming the specific evidence that would most shift your conclusion>
+
 ---
 
 Question:
@@ -189,6 +194,10 @@ only revise the specific point that was wrong.
 - Use `### Point N — DEFEND` or `### Point N — REFINE` headers.
 - Be concise and precise — 2-4 sentences per point.
 - Maintain all live market figures from the Verified Context Block throughout.
+
+End your entire response with exactly these two lines and nothing after them:
+CONFIDENCE: <a single integer from 0 to 100 — your confidence in your position after this peer review>
+Most likely to change my mind: <one sentence naming the specific evidence that would most shift your conclusion>
 """
 
 # Stage 2 – Factual Audit + peer review
@@ -206,6 +215,11 @@ A colleague AI model has answered the question below.
 
 --- Other Models' Answers (for context) ---
 {other_answers}
+
+⚖️ Independence rule: Agreement among the other experts is NOT evidence of \
+correctness.  Audit every claim on its merits.  If all answers share an \
+assumption, challenge that assumption.  Do not soften your critique because \
+others agree.
 
 ## Audit Tasks (complete in this exact order)
 
@@ -242,6 +256,22 @@ ignored or underweighted, flag it with: **⚠️ UNADDRESSED VISUAL ASSET DETECT
 and specify what visual evidence was missed.
 
 Format your review with clear markdown headings.
+"""
+
+# Devil's-advocate role clause — prepended to ONE deterministically-chosen
+# reviewer's critique prompt per target (see logic_engine.run_stage2_cross_critique).
+# Forces a genuine opposing case so a shaky consensus is stress-tested rather than
+# rubber-stamped.  Used in both regular and academic mode.  No placeholders.
+DEVILS_ADVOCATE_CLAUSE = """\
+🎭 DEVIL'S ADVOCATE ASSIGNMENT
+For this one review you are assigned the devil's advocate role.  However \
+convincing the answer looks, build the strongest good-faith counter-case \
+against it: find the single weakest load-bearing claim it depends on, attack \
+that claim directly with concrete reasoning, and argue for the best \
+alternative answer the council may have missed.  Do not hedge and do not \
+rubber-stamp — make the most compelling honest opposing case you can, then \
+proceed with the structured review below.
+
 """
 
 # Stage 3 – Master Sieve synthesis with Iron Rule Data Hierarchy
@@ -307,7 +337,9 @@ unified, authoritative response.
 
 # ── Stage 3b — Disagreement Extraction ────────────────────────────────────
 # One LLM call: reads compressed critique+dialectic summaries, returns JSON.
-# Placeholders: {question}, {critiques_summary}, {dialectic_summary}, {available_keys}
+# Experts are anonymised (Expert A/B/C…); the returned labels are mapped back to
+# real model keys in logic_engine._extract_disagreement_points.
+# Placeholders: {question}, {critiques_summary}, {dialectic_summary}, {available_labels}
 PROMPT_EXTRACT_DISAGREEMENTS = """\
 You are a debate analyst reviewing an AI council discussion.
 
@@ -321,7 +353,7 @@ You are a debate analyst reviewing an AI council discussion.
 {dialectic_summary}
 
 ## Task
-Identify exactly 2-3 points where models GENUINELY disagree after Stage 3.
+Identify exactly 2-3 points where the experts GENUINELY disagree after Stage 3.
 Ignore stylistic differences. Focus only on factual or logical contradictions
 that were NOT resolved in Stage 3.
 
@@ -330,22 +362,25 @@ For each point, output ONLY this exact JSON structure — nothing else:
   {{
     "point_id": 1,
     "summary": "One sentence describing what they disagree on.",
-    "model_keys": ["key1", "key2"],
+    "experts": ["Expert A", "Expert B"],
     "excerpt": "The specific contested claim or figure, quoted exactly (max 40 words)."
   }}
 ]
 
 Rules:
 - If fewer than 2 genuine disagreements exist, return an empty list: []
-- model_keys must be exact keys from this set: {available_keys}
+- "experts" must contain exact expert labels from this set: {available_labels}
 - Never invent disagreements. Only report what is explicit in the text above.
 - Return valid JSON only. No preamble, no explanation.
 """
 
 # ── Stage 3b — Debate Round 1: Opening Position ───────────────────────────
-# Placeholders: {your_label}, {question}, {point_summary}, {excerpt}
+# Placeholders: {verified_context}, {your_label}, {question}, {point_summary}, {excerpt}
 PROMPT_DEBATE_OPENING = """\
 You are {your_label}, participating in a focused one-point debate.
+
+--- Verified Context (live ground truth — defer to these figures over memory) ---
+{verified_context}
 
 --- The Question ---
 {question}
@@ -358,25 +393,34 @@ You are {your_label}, participating in a focused one-point debate.
 
 State your position on this specific point in 3-5 sentences.
 - Be precise. Reference the excerpt directly.
+- Ground every figure in the Verified Context above, not training memory.
 - No preamble. No references to previous stages. Just your current position.
 - If you hold the same view as before, say so and explain why concisely.
 """
 
 # ── Stage 3b — Debate Round 2: Direct Response ────────────────────────────
-# Placeholders: {your_label}, {point_summary}, {opponent_label}, {opponent_opening}
+# Placeholders: {verified_context}, {your_label}, {question}, {point_summary},
+#               {opponent_openings}
 PROMPT_DEBATE_RESPONSE = """\
 You are {your_label}, in the direct-response round of a focused debate.
+
+--- Verified Context (live ground truth — defer to these figures over memory) ---
+{verified_context}
+
+--- The Question ---
+{question}
 
 --- Contested Point ---
 {point_summary}
 
---- {opponent_label}'s Position ---
-{opponent_opening}
+--- Opening Positions of the Other Experts ---
+{opponent_openings}
 
-Respond directly to {opponent_label}'s position in 3-5 sentences.
-- Address their specific argument, not a strawman.
-- Either concede the point (with explicit acknowledgement) or rebut it with
-  clear reasoning.
+Respond directly to the other experts' opening positions in 3-6 sentences.
+- Address their actual arguments, not strawmen. Name the expert you are answering.
+- Either concede a point (with explicit acknowledgement) or rebut it with clear
+  reasoning.
+- Ground every figure in the Verified Context above, not training memory.
 - No preamble. No stage references. Just your direct response.
 """
 
@@ -390,6 +434,12 @@ COUNCIL_CONSENSUS_PROMPT = """\
 You are NOT one of the debating agents.  You have observed the complete \
 Dual-Sided Adversarial Discussion (DSAD) below and must now extract the \
 verified truth from it.
+
+The experts below are anonymised as Expert A, Expert B, Expert C, … .  You do \
+NOT know which AI system or vendor any expert is, and you do NOT know which \
+expert (if any) authored text you might recognise as your own.  Judge every \
+position solely on its evidence and reasoning — never on its presumed source \
+or on its position in the list.
 
 --- Original Question ---
 {question}
@@ -410,7 +460,10 @@ verified truth from it.
 
 ### Step 1 — Map Convergence
 Identify every claim ALL models ultimately agreed upon after the dialectic. \
-These are the most reliable truths — highlight them explicitly.
+These are the most reliable truths — highlight them explicitly.  But agreement \
+alone is NOT proof: when experts conflict, resolve it by weighing each expert's \
+stated CONFIDENCE line and whether the claim SURVIVED the adversarial critique \
+and the focused debate — never by counting how many experts took each side.
 
 ### Step 2 — Apply Iron Rule Data Hierarchy
 - **Tier 1 ✅ VERIFIED** — Data backed by live citations from the Verified \
@@ -514,6 +567,10 @@ Ground every item in the literature. Use clear markdown subheadings.
 
 ### Step 4 — Limitations & Evidence Gaps
 What does the current evidence NOT support? What further research is needed?
+
+End your entire response with exactly these two lines and nothing after them:
+CONFIDENCE: <a single integer from 0 to 100 — your confidence in the Primary Deliverable>
+Most likely to change my mind: <one sentence naming the specific evidence that would most shift your conclusion>
 """
 
 PROMPT_ACADEMIC_CRITIQUE = """\
@@ -528,6 +585,11 @@ You are a peer reviewer for a high-impact academic journal.
 
 --- Other Researchers' Responses (for context) ---
 {other_answers}
+
+⚖️ Independence rule: Agreement among the other experts is NOT evidence of \
+correctness.  Audit every claim on its merits.  If all responses share an \
+assumption, challenge that assumption.  Do not soften your critique because \
+others agree.
 
 ## Peer Review Tasks
 
@@ -582,12 +644,24 @@ or missing content.
 a general discussion instead of the specifically requested output), you MUST \
 fill that gap NOW. Do not merely acknowledge it — write the missing deliverable \
 in full, grounded in evidence.
+
+End your entire response with exactly these two lines and nothing after them:
+CONFIDENCE: <a single integer from 0 to 100 — your confidence in your refined position>
+Most likely to change my mind: <one sentence naming the specific evidence that would most shift your conclusion>
 """
 
 PROMPT_ACADEMIC_CONSENSUS = """\
 {vision_prefix}{verified_context}\
 You are the Editor-in-Chief synthesising a multi-expert peer review process. \
 Your output will be presented as a formal academic research report.
+
+The experts below are anonymised as Expert A, Expert B, Expert C, … .  You do \
+NOT know which AI system or vendor any expert is, and you do NOT know which \
+expert (if any) authored text you might recognise as your own.  Weigh every \
+position solely on its evidence and reasoning — never on its presumed source \
+or list position.  When experts conflict, resolve it by weighing each expert's \
+stated CONFIDENCE line and whether the claim survived peer critique and the \
+focused debate, not by majority count.
 
 --- Research Question ---
 {question}
@@ -810,7 +884,7 @@ UI_EXPANDER_CRITIQUE  = "🔬 {label} — Critique of {target_label}"
 UI_WARNING_MIN_MODELS = "Please select at least one model in addition to the Master Model."
 UI_ERROR_PREFIX       = "⚠️ Error from {label}: "
 UI_NO_ANSWER          = "_No answer returned._"
-FALLBACK_NOTICE       = "⚠️ Primary Master Model failed. Using Gemini 3 Pro as fallback."
+FALLBACK_NOTICE       = "⚠️ Primary Master Model failed. Using Gemini 3.1 Pro as fallback."
 UI_UNVERIFIED_WARNING = (
     "⛔ Zero-Trust Alert: This answer contains numeric or factual claims but no "
     "live citations were retrieved from Google Search. Figures, prices, dates, and "
@@ -1455,7 +1529,7 @@ You are a senior creative director with 15+ years of experience creating visual 
 advertising for mobile apps and digital marketing campaigns.
 
 Your task: read the AI council debate answer below and convert its core marketing \
-message into a single, highly optimised DALL-E 3 image-generation prompt.
+message into a single, highly optimised gpt-image-2 image-generation prompt.
 
 --- AI Council Final Answer ---
 {final_answer}
@@ -1467,7 +1541,7 @@ message into a single, highly optimised DALL-E 3 image-generation prompt.
 ## Output Rules — follow EXACTLY
 
 1. Output ONLY the image prompt — no preamble, no explanation, no markdown headers.
-2. Write in English (DALL-E 3 performs best in English).
+2. Write in English (gpt-image-2 performs best in English).
 3. Structure the prompt as: \
 [Shot type & composition] + [Subject / scene] + [Visual style] + [Lighting] + [Mood / atmosphere]
 4. Be cinematic and specific — avoid vague adjectives like "beautiful", "amazing", "stunning".
@@ -1478,7 +1552,7 @@ storytelling alone — show the outcome, not the app interface.
 8. For safety / personal-protection apps: show a real person in a relatable dangerous \
 scenario where calm, competence, or rescue is the emotional payoff.
 
-Write the DALL-E 3 prompt now:"""
+Write the gpt-image-2 prompt now:"""
 
 PROMPT_MEDIA_VIDEO_BRIEF = """\
 You are a senior creative director specialising in ultra-short video ads (5-6 seconds) \
@@ -1570,7 +1644,7 @@ Output ONLY a JSON array — no explanation, no markdown, no extra text:
 
 UI_MEDIA_PANEL_HEADER      = "🎬 ייצור מדיה שיווקית"
 UI_MEDIA_PANEL_CAPTION     = "צור תמונות או קליפים מקצועיים המבוססים ישירות על תוצאת הדיון"
-UI_MEDIA_IMAGE_EXPANDER    = "🖼️ צור תמונה שיווקית (DALL-E 3)"
+UI_MEDIA_IMAGE_EXPANDER    = "🖼️ צור תמונה שיווקית (gpt-image-2)"
 UI_MEDIA_VIDEO_EXPANDER    = "🎥 צור קליפ שיווקי (AI Video)"
 UI_MEDIA_CONTEXT_LABEL     = "הקשר נוסף לקמפיין (אופציונלי)"
 UI_MEDIA_CONTEXT_HELP      = "לדוגמא: קהל יעד, גיל, ערוץ פרסום, טון רצוי, מדינה..."
@@ -1584,7 +1658,7 @@ UI_MEDIA_VIDEO_MODEL_LABEL = "מודל וידאו"
 UI_MEDIA_GENERATE_IMG_BTN  = "✨ צור תמונה"
 UI_MEDIA_GENERATE_VID_BTN  = "🎬 צור קליפ"
 UI_MEDIA_STEP_PROMPT       = "שלב 1/2 — בונה פרומפט יצירתי עם Claude..."
-UI_MEDIA_STEP_IMAGE        = "שלב 2/2 — מייצר תמונה עם DALL-E 3 (כ-15 שניות)..."
+UI_MEDIA_STEP_IMAGE        = "שלב 2/2 — מייצר תמונה עם gpt-image-2 (כ-15 שניות)..."
 UI_MEDIA_STEP_VIDEO        = "שלב 2/2 — מייצר קליפ (עד 3 דקות — נא להמתין)..."
 UI_MEDIA_DL_IMG_BTN        = "⬇️ הורד תמונה (PNG)"
 UI_MEDIA_DL_VID_BTN        = "⬇️ הורד קליפ (MP4)"
@@ -1612,7 +1686,7 @@ UI_MEDIA_IMG_STORY_HDR      = "📸 סטוריבורד תמונות שיווקי
 UI_MEDIA_IMG_STORY_NOTE     = "הצג את התמונות ברצף — יחד הן מספרות סיפור שלם"
 UI_MEDIA_IMG_STORY_COUNT    = "מספר תמונות"
 UI_MEDIA_STEP_IMG_STORY     = "שלב 1/2 — בונה תסריט תמונות עם Claude..."
-UI_MEDIA_STEP_IMG_GEN       = "שלב 2/2 — מייצר תמונה {n}/{total} עם DALL-E 3..."
+UI_MEDIA_STEP_IMG_GEN       = "שלב 2/2 — מייצר תמונה {n}/{total} עם gpt-image-2..."
 UI_MEDIA_IMG_REGEN_STORY    = "🔄 צור סטוריבורד מחדש"
 UI_MEDIA_DL_IMG_N           = "⬇️ הורד תמונה {n}"
 
@@ -1873,7 +1947,7 @@ UI_CULTURAL_EXPANDER        = "🌍 קמפיין מותאם תרבותית — �
 UI_CULTURAL_CAPTION         = "בחר שווקי יעד וצור תמונה או קליפ מותאם תרבותית לכל אחד"
 UI_CULTURAL_MARKET_SELECT   = "בחר שווקי יעד (ניתן לבחור מספר)"
 UI_CULTURAL_MEDIA_TYPE      = "סוג מדיה"
-UI_CULTURAL_MEDIA_IMAGE     = "תמונה (DALL-E 3)"
+UI_CULTURAL_MEDIA_IMAGE     = "תמונה (gpt-image-2)"
 UI_CULTURAL_MEDIA_VIDEO     = "קליפ (Replicate)"
 UI_CULTURAL_SIZE_LABEL      = "פורמט"
 UI_CULTURAL_CTX_LABEL       = "הקשר קמפיין (אופציונלי — חל על כל השווקים)"

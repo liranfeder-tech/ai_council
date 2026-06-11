@@ -20,6 +20,7 @@ debates and history replays without consuming any API tokens.
 """
 
 from dotenv import load_dotenv
+import html
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -248,7 +249,10 @@ from history_manager import (
     firestore_status,
     get_usage_count,
     get_user_history,
+    increment_usage,
+    is_within_usage_limit,
     load_history,
+    safe_pdf_cache_path,
     save_to_history,
 )
 from auth_manager import (
@@ -749,7 +753,6 @@ with st.sidebar:
         st.caption(UI_HISTORY_EMPTY)
     else:
         from datetime import datetime as _sdt, date as _sdate, timedelta as _std
-        from pathlib import Path as _SPath
 
         _today     = _sdate.today()
         _yesterday = _today - _std(days=1)
@@ -796,9 +799,11 @@ with st.sidebar:
                 if edate else entry["timestamp"]
             )
 
-            # PDF quick-download: only show if the cached file still exists on disk
-            _cache    = rs.get("pdf_cache_path", "")
-            _has_pdf  = bool(_cache and _SPath(_cache).exists())
+            # PDF quick-download: pdf_cache_path comes from user-writable history,
+            # so validate it resolves to a real file inside the PDF cache dir before
+            # trusting it as a path (never read an arbitrary path from history).
+            _safe_cache = safe_pdf_cache_path(rs.get("pdf_cache_path", ""))
+            _has_pdf    = _safe_cache is not None
 
             if _has_pdf:
                 _c1, _c2 = st.columns([3, 1])
@@ -809,7 +814,7 @@ with st.sidebar:
                         st.rerun()
                 with _c2:
                     try:
-                        _pdf_data  = _SPath(_cache).read_bytes()
+                        _pdf_data  = _safe_cache.read_bytes()
                         _pdf_fname = (
                             f"AI_Playground_{edate.isoformat()}.pdf"
                             if edate else "AI_Playground_report.pdf"
@@ -1025,15 +1030,23 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
         key="code_review_zip_input",
     )
 
-    # Option B — local path (only works when running locally)
-    _cr_col_path, _cr_col_btn, _cr_col_clear = st.columns([5, 1, 1])
-    with _cr_col_path:
-        _cr_path = st.text_input(
-            UI_CODE_REVIEW_PATH_LABEL,
-            placeholder=UI_CODE_REVIEW_PATH_PLACEHOLDER,
-            key="code_review_path_input",
-            label_visibility="collapsed",
-        )
+    # Option B — local path. The path input and the local-path scan are gated
+    # behind COUNCIL_ALLOW_LOCAL_SCAN=1: without it a deployed instance would let
+    # any visitor type a server path and read arbitrary files. The ZIP flow above
+    # is unaffected; the Scan / Clear buttons stay (the ZIP flow uses Scan too).
+    _cr_allow_local = os.environ.get("COUNCIL_ALLOW_LOCAL_SCAN") == "1"
+    _cr_path = ""
+    if _cr_allow_local:
+        _cr_col_path, _cr_col_btn, _cr_col_clear = st.columns([5, 1, 1])
+        with _cr_col_path:
+            _cr_path = st.text_input(
+                UI_CODE_REVIEW_PATH_LABEL,
+                placeholder=UI_CODE_REVIEW_PATH_PLACEHOLDER,
+                key="code_review_path_input",
+                label_visibility="collapsed",
+            )
+    else:
+        _cr_col_btn, _cr_col_clear = st.columns([6, 1])
     with _cr_col_btn:
         _cr_scan = st.button(UI_CODE_REVIEW_SCAN_BTN, use_container_width=True)
     with _cr_col_clear:
@@ -1066,12 +1079,16 @@ with st.expander(UI_CODE_REVIEW_TOGGLE, expanded=bool(st.session_state.code_revi
                 except zipfile.BadZipFile:
                     st.error("❌ קובץ ה-ZIP פגום או לא תקין")
                     _scan_target = ""
-            else:
+            elif _cr_allow_local:
                 _scan_target = _cr_path.strip()
 
             if _scan_target:
                 with st.spinner(UI_CODE_REVIEW_SCANNING):
-                    _cr_block, _cr_files, _cr_warns = scan_project(_scan_target)
+                    # ZIP extraction temp dir is a trusted sandboxed source; a
+                    # user-typed local path is not (it stays gated by the env var).
+                    _cr_block, _cr_files, _cr_warns = scan_project(
+                        _scan_target, trusted_source=(_cr_zip is not None)
+                    )
                 if _cr_block:
                     st.session_state.code_review_context  = _cr_block
                     st.session_state.code_review_files    = _cr_files
@@ -1291,6 +1308,20 @@ def _render_citation_cards(citations: list[dict]) -> None:
             except Exception:
                 domain = url
 
+            # title/domain/url come from live web-search results and from
+            # user-writable history — escape them before HTML interpolation.
+            safe_title  = html.escape(title or "")
+            safe_domain = html.escape(domain or "")
+            # Only render a clickable link for real http(s) URLs; anything else
+            # (javascript:, data:, relative, empty) shows as a card with no link.
+            _is_web_url = isinstance(url, str) and url.startswith(("http://", "https://"))
+            _link_html  = (
+                f'<a href="{html.escape(url, quote=True)}" target="_blank" '
+                f'style="font-size:.82em;color:#3b82f6;text-decoration:none;'
+                f'font-weight:600">{UI_CITATION_VISIT}</a>'
+                if _is_web_url else ""
+            )
+
             with col:
                 st.markdown(
                     f"""
@@ -1300,12 +1331,10 @@ def _render_citation_cards(citations: list[dict]) -> None:
                         height:100%;min-height:90px;">
                       <div style="font-size:.78em;color:#64748b;font-weight:600;
                           letter-spacing:.03em;text-transform:uppercase;
-                          margin-bottom:4px">{domain}</div>
+                          margin-bottom:4px">{safe_domain}</div>
                       <div style="font-size:.9em;color:#1e293b;font-weight:500;
-                          margin-bottom:10px;line-height:1.4">{title}</div>
-                      <a href="{url}" target="_blank" style="font-size:.82em;
-                          color:#3b82f6;text-decoration:none;font-weight:600"
-                      >{UI_CITATION_VISIT}</a>
+                          margin-bottom:10px;line-height:1.4">{safe_title}</div>
+                      {_link_html}
                     </div>""",
                     unsafe_allow_html=True,
                 )
@@ -1971,6 +2000,34 @@ def _display_results(results: dict) -> None:
             st.session_state.from_history    = False
             st.rerun()
 
+    # ── Hard failure: the council produced no usable answer ───────────────────
+    # (debate_failed → every Stage-1 model failed, or Stage-4 synthesis collapsed)
+    # .get() keeps old history entries — which lack these keys — rendering normally.
+    if results.get("debate_failed"):
+        st.error("❌ מועצת ה-AI לא הצליחה להפיק תשובה סופית. נסה שוב מאוחר יותר.")
+        _failed_hard = results.get("failed_models", {})
+        if _failed_hard:
+            _hard_lines = [
+                f"- **{MODELS.get(_mk, {}).get('label', _mk)}**: {str(_err)[:120]}"
+                for _mk, _err in _failed_hard.items()
+            ]
+            st.markdown("**מודלים שנכשלו:**\n" + "\n".join(_hard_lines))
+        _stage_errs = results.get("stage_errors", [])
+        if _stage_errs:
+            st.markdown("**שגיאות בשלבים:**\n" + "\n".join(f"- {_s}" for _s in _stage_errs))
+        return   # do NOT render answer sections or generate a PDF
+
+    # ── Partial failure: some models dropped out but a final answer exists ─────
+    _failed_partial = results.get("failed_models", {})
+    if _failed_partial:
+        _part_lines = [
+            f"- {MODELS.get(_mk, {}).get('label', _mk)}: {str(_err)[:120]}"
+            for _mk, _err in _failed_partial.items()
+        ]
+        st.warning(
+            "⚠️ חלק מהמודלים נכשלו והדיון רץ בלעדיהם:\n\n" + "\n".join(_part_lines)
+        )
+
     final     = results["final_answer"]
     citations = results.get("citations", [])
 
@@ -2067,14 +2124,13 @@ def _display_results(results: dict) -> None:
     # ── PDF download (serve cached file if available, else regenerate) ───────
     try:
         from datetime import date as _date
-        from pathlib import Path as _Path
-        _cache_path = results.get("pdf_cache_path", "")
+        _safe_cache = safe_pdf_cache_path(results.get("pdf_cache_path", ""))
         pdf_bytes: Optional[bytes] = None
-        if _cache_path:
+        if _safe_cache is not None:
             try:
-                pdf_bytes = _Path(_cache_path).read_bytes()
+                pdf_bytes = _safe_cache.read_bytes()
             except Exception:
-                pdf_bytes = None   # cached file missing — fall back to regen
+                pdf_bytes = None   # cached file unreadable — fall back to regen
         if pdf_bytes is None:
             pdf_bytes = generate_pdf(results)
         filename = f"AI_Playground_Report_{_date.today().isoformat()}.pdf"
@@ -2217,8 +2273,12 @@ if start_button or _fup_question is not None:
         _fup_academic if _fup_question is not None
         else st.session_state.get(f"academic_mode_{st.session_state._query_counter}", False)
     )
+    # Skip the cache when files are attached (data files OR a code-review
+    # context block): the cache matches on question text only, so the default
+    # question would otherwise replay a previous file's results for a new file.
     if _active_question.strip() and not _active_images and not st.session_state._force_rerun \
-            and _fup_question is None and not _academic_on_now:
+            and _fup_question is None and not _academic_on_now \
+            and not _active_code_ctx and not st.session_state.code_review_context:
         _uid_for_cache = (st.session_state.user or {}).get("uid")
         _hist_for_cache = get_user_history(_uid_for_cache) if _uid_for_cache else load_history()
         _q_norm = _active_question.strip().lower()
@@ -2236,11 +2296,14 @@ if start_button or _fup_question is not None:
     st.session_state._force_rerun = False
 
     # ── Usage limit check (server-side gate via Firestore) ────────────────────
+    # READ-ONLY gate: we only check whether the user is under the daily cap here.
+    # The counter is incremented (charged) AFTER a successful debate, so an abort
+    # or crash before/within the debate never consumes the user's quota.
     _uid_limit = (st.session_state.user or {}).get("uid")
     if _uid_limit:
-        _allowed, _new_count = check_usage_limit(_uid_limit)
-        # Bust the cached count so the sidebar reflects the new value
-        st.session_state._cached_usage = (_uid_limit, _new_count)
+        _allowed, _current_count = is_within_usage_limit(_uid_limit)
+        # Refresh the cached count so the sidebar reflects today's value
+        st.session_state._cached_usage = (_uid_limit, _current_count)
         if not _allowed:
             st.warning(UI_QUOTA_REACHED)
             st.stop()
@@ -2381,56 +2444,88 @@ if start_button or _fup_question is not None:
         set_session_api_keys(st.session_state.user_api_keys)
 
         # ── Run the full DSAD debate ──────────────────────────────────────────
-        _live_results = run_council_debate(
-            active_keys=selected_keys,
-            question=_active_question,
-            images=_active_images,
-            images_mime=_active_images_mime,
-            previous_context=_previous_ctx,
-            code_context=_active_code_ctx,
-            academic_mode=_academic_on_now,
-            year_from=st.session_state.get(
-                f"academic_year_from_{st.session_state._query_counter}"
-            ),
-            year_to=st.session_state.get(
-                f"academic_year_to_{st.session_state._query_counter}"
-            ),
-            stage0_cb=stage0_cb,
-            stage1_cb=stage1_cb,
-            stage2_cb=stage2_cb,
-            stage3_cb=stage3_cb,
-            stage3b_cb=stage3b_cb,
-            stage4_cb=stage4_cb,
-        )
+        # Wrapped so an unexpected crash (or a user abort) never charges quota
+        # and never saves a broken entry to history — the gate above was
+        # read-only, so nothing has been consumed yet.
+        try:
+            _live_results = run_council_debate(
+                active_keys=selected_keys,
+                question=_active_question,
+                images=_active_images,
+                images_mime=_active_images_mime,
+                previous_context=_previous_ctx,
+                code_context=_active_code_ctx,
+                academic_mode=_academic_on_now,
+                year_from=st.session_state.get(
+                    f"academic_year_from_{st.session_state._query_counter}"
+                ),
+                year_to=st.session_state.get(
+                    f"academic_year_to_{st.session_state._query_counter}"
+                ),
+                stage0_cb=stage0_cb,
+                stage1_cb=stage1_cb,
+                stage2_cb=stage2_cb,
+                stage3_cb=stage3_cb,
+                stage3b_cb=stage3b_cb,
+                stage4_cb=stage4_cb,
+            )
+        except Exception as _debate_exc:   # noqa: BLE001
+            status.update(
+                label="❌ מועצת ה-AI נכשלה — אירעה שגיאה בלתי צפויה",
+                state="error",
+            )
+            st.error(
+                f"שגיאה בלתי צפויה הפסיקה את הדיון: {type(_debate_exc).__name__}. "
+                f"לא חויבה מכסה — נסה שוב."
+            )
+            st.stop()
 
-        # ── Final state: all circles complete ─────────────────────────────────
-        _state["completed"] = {0, 1, 2, 3, 4, 5}
-        _state["stage"]     = -1
-        _refresh_ui()
+        # ── Final state: reflect success vs. hard failure ─────────────────────
+        _debate_failed = bool(_live_results.get("debate_failed"))
+        if _debate_failed:
+            status.update(
+                label="❌ מועצת ה-AI לא הצליחה להפיק תשובה",
+                state="error",
+                expanded=False,
+            )
+        else:
+            _state["completed"] = {0, 1, 2, 3, 4, 5}
+            _state["stage"]     = -1
+            _refresh_ui()
+            status.update(
+                label="✅ Council deliberation complete — results ready!",
+                state="complete",
+                expanded=False,
+            )
 
-        status.update(
-            label="✅ Council deliberation complete — results ready!",
-            state="complete",
-            expanded=False,
-        )
+    # ── Charge quota only now that the debate actually produced results ───────
+    # The pre-debate gate was READ-ONLY; the counter is incremented here so a
+    # crash, abort, or all-models-failure never consumes the user's daily quota.
+    _charge_uid = (st.session_state.user or {}).get("uid")
+    if _charge_uid and not _debate_failed:
+        _charged_count = increment_usage(_charge_uid)
+        st.session_state._cached_usage = (_charge_uid, _charged_count)
 
     # ── Persist and re-render from session state ──────────────────────────────
-    # Generate PDF once here so save_to_history can cache it to disk.
-    # The cached path is stored in session state so _display_results() serves
-    # the file directly without regenerating on the first (live-run) display.
-    _pdf_for_cache: Optional[bytes] = None
-    try:
-        _pdf_for_cache = generate_pdf(_live_results)
-    except Exception:
-        pass
+    # A fully failed debate is NEVER saved and no PDF is cached. Partial
+    # failures that still produced a valid final answer ARE saved as usual.
+    if not _debate_failed:
+        # Generate PDF once here so save_to_history can cache it to disk.
+        # The cached path is stored so _display_results() serves the file
+        # directly without regenerating on the first (live-run) display.
+        _pdf_for_cache: Optional[bytes] = None
+        try:
+            _pdf_for_cache = generate_pdf(_live_results)
+        except Exception:
+            pass
 
-    _current_uid  = (st.session_state.user or {}).get("uid")
-    try:
-        _cached_path  = save_to_history(_live_results, pdf_bytes=_pdf_for_cache, uid=_current_uid)
-        if _cached_path:
-            _live_results["pdf_cache_path"] = _cached_path
-    except Exception:
-        pass
+        _current_uid  = (st.session_state.user or {}).get("uid")
+        try:
+            _cached_path  = save_to_history(_live_results, pdf_bytes=_pdf_for_cache, uid=_current_uid)
+            if _cached_path:
+                _live_results["pdf_cache_path"] = _cached_path
+        except Exception:
+            pass
 
     st.session_state.current_results = _live_results
     st.session_state.from_history    = False

@@ -31,6 +31,8 @@ from glossary import (
 def scan_project(
     folder_path: str,
     extensions: Optional[Set[str]] = None,
+    *,
+    trusted_source: bool = False,
 ) -> Tuple[str, List[str], List[str]]:
     """
     Scan a project folder and return a formatted code context block.
@@ -42,6 +44,12 @@ def scan_project(
     extensions : set[str], optional
         File extensions to include (e.g. {".py", ".js"}).
         Defaults to CODE_REVIEW_EXTENSIONS from glossary.
+    trusted_source : bool, optional
+        True only for server-created sandboxed sources (e.g. the temp directory a
+        ZIP upload is extracted into). When False (the default), an arbitrary local
+        path is refused unless COUNCIL_ALLOW_LOCAL_SCAN == "1", so a deployed
+        instance cannot be tricked into reading arbitrary server files
+        (e.g. firebase_key.json).
 
     Returns
     -------
@@ -52,6 +60,16 @@ def scan_project(
         - included_files : list of relative file paths that were included
         - warnings : list of human-readable skip/truncation notices
     """
+    # Security gate — refuse arbitrary local-path scans unless explicitly enabled.
+    # Trusted sandboxed callers (the ZIP-extraction temp dir) opt in via
+    # trusted_source; everyone else needs COUNCIL_ALLOW_LOCAL_SCAN == "1".
+    if not trusted_source and os.environ.get("COUNCIL_ALLOW_LOCAL_SCAN") != "1":
+        return (
+            "",
+            [],
+            ["סריקת נתיב מקומי מושבתת בשרת זה — העלה את הפרויקט כקובץ ZIP."],
+        )
+
     extensions = extensions or CODE_REVIEW_EXTENSIONS
     root = Path(folder_path).expanduser().resolve()
 
