@@ -864,6 +864,31 @@ def _format_focused_debate(
 
 
 # ---------------------------------------------------------------------------
+# Heartbeat wrapper for long single blocking calls
+# ---------------------------------------------------------------------------
+
+def _run_with_heartbeat(thunk, progress_cb=None, label="", start_frac=0.1):
+    """Run a blocking ``thunk`` in a worker thread, emitting a progress heartbeat
+    every ~3 s so Streamlit Cloud's WebSocket never goes silent long enough to
+    drop and rerun the script.  Used for the synthesis call (a 16K-token academic
+    report can take 1-2 minutes as one silent block).  ``copy_context().run``
+    carries _ACADEMIC_MODE and the BYOK session keys into the worker thread.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(contextvars.copy_context().run, thunk)
+        beats = 0
+        while not fut.done():
+            try:
+                concurrent.futures.wait([fut], timeout=3.0)
+            except Exception:
+                pass
+            if not fut.done() and progress_cb:
+                beats += 1
+                progress_cb(min(start_frac + 0.05 * beats, 0.9), f"{label} ({beats * 3}s)")
+        return fut.result()
+
+
+# ---------------------------------------------------------------------------
 # Stage 4 — Consensus Synthesis (DSAD)
 # ---------------------------------------------------------------------------
 
@@ -926,9 +951,14 @@ def run_stage4_consensus(
     _gemini_tokens     = 16000
     _synthesis_timeout = 600.0 if _is_academic else 420.0
 
-    final_answer, _cit = call_model_with_citations(
-        MASTER_MODEL_KEY, prompt, images, images_mime,
-        max_tokens=_claude_tokens, request_timeout=_synthesis_timeout,
+    final_answer, _cit = _run_with_heartbeat(
+        lambda: call_model_with_citations(
+            MASTER_MODEL_KEY, prompt, images, images_mime,
+            max_tokens=_claude_tokens, request_timeout=_synthesis_timeout,
+        ),
+        progress_cb=progress_cb,
+        label=f"🏛️ {master_label} (Mediator) is synthesising",
+        start_frac=0.15,
     )
     fallback_used = False
 
@@ -938,9 +968,14 @@ def run_stage4_consensus(
                 0.5,
                 f"⚠️ {master_label} failed — switching to {fallback_label} …",
             )
-        fb_answer, _fb_cit = call_model_with_citations(
-            FALLBACK_MODEL_KEY, prompt, images, images_mime,
-            max_tokens=_gemini_tokens, request_timeout=_synthesis_timeout,
+        fb_answer, _fb_cit = _run_with_heartbeat(
+            lambda: call_model_with_citations(
+                FALLBACK_MODEL_KEY, prompt, images, images_mime,
+                max_tokens=_gemini_tokens, request_timeout=_synthesis_timeout,
+            ),
+            progress_cb=progress_cb,
+            label=f"🏛️ {fallback_label} (fallback) is synthesising",
+            start_frac=0.55,
         )
         if fb_answer and not fb_answer.startswith("ERROR:"):
             final_answer  = fb_answer
@@ -1014,23 +1049,48 @@ def run_council_debate(
     _ACADEMIC_MODE.set(academic_mode)
 
     # ── Stage 0: Pre-flight search (live market data + optional academic lit) ─
+    _s0_label = UI_ACADEMIC_SEARCHING if academic_mode else UI_STAGE0_SEARCHING
     if stage0_cb:
-        stage0_cb(0.0, UI_ACADEMIC_SEARCHING if academic_mode else UI_STAGE0_SEARCHING)
+        stage0_cb(0.0, _s0_label)
 
-    # Academic literature search (runs instead of / alongside standard search)
+    # The pre-flight searches are slow (the academic multi-source search can take
+    # 15-60s) and otherwise run as ONE silent synchronous block — long enough for
+    # Streamlit Cloud's WebSocket to go idle, drop, and rerun the whole script
+    # ("started analysing, then jumped back to the start").  Fix: run the academic
+    # and broad searches concurrently in worker threads and emit a heartbeat to the
+    # UI every few seconds so the connection never goes silent.  copy_context()
+    # carries _ACADEMIC_MODE and the BYOK session keys into the worker threads.
     academic_papers: list = []
     academic_notes: List[str] = []   # honest degradation messages → stage_errors
-    if academic_mode:
-        try:
-            from academic_search import search_academic_papers, build_literature_context_block
-            academic_papers, academic_notes = search_academic_papers(
-                question, year_from, year_to, max_results=12
-            )
-        except Exception:
-            academic_papers = []
-            academic_notes  = []
 
-    broad_block, preflight_citations = get_live_market_data(question)
+    def _do_academic_search():
+        if not academic_mode:
+            return [], []
+        try:
+            from academic_search import search_academic_papers
+            return search_academic_papers(question, year_from, year_to, max_results=12)
+        except Exception:
+            return [], []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _s0_ex:
+        _fut_acad  = _s0_ex.submit(contextvars.copy_context().run, _do_academic_search)
+        _fut_broad = _s0_ex.submit(contextvars.copy_context().run,
+                                   get_live_market_data, question)
+        _beats = 0
+        while not (_fut_acad.done() and _fut_broad.done()):
+            try:
+                concurrent.futures.wait(
+                    [_fut_acad, _fut_broad], timeout=3.0,
+                    return_when=concurrent.futures.ALL_COMPLETED,
+                )
+            except Exception:
+                pass
+            if not (_fut_acad.done() and _fut_broad.done()) and stage0_cb:
+                _beats += 1
+                # Fraction creeps toward (not to) 1.0 so the bar keeps moving.
+                stage0_cb(min(0.1 + 0.08 * _beats, 0.9), f"{_s0_label} ({_beats * 3}s)")
+        academic_papers, academic_notes = _fut_acad.result()
+        broad_block, preflight_citations = _fut_broad.result()
 
     # Stage 0 complete — log the live status to the UI
     if stage0_cb:

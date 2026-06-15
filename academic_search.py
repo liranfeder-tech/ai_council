@@ -203,6 +203,14 @@ def _plan_academic_queries(question: str) -> Tuple[List[str], List[str]]:
 
 _OA_URL = "https://api.openalex.org/works"
 
+# OpenAlex's "polite pool" is faster and far less likely to throttle when several
+# requests arrive from the same IP at once. Entry just needs a contact address in
+# the `mailto` param — CONTACT_EMAIL overrides it; otherwise a generic project
+# contact is sent so concurrent academic searches don't stall on the slow common
+# pool (which was hanging requests to the full timeout and dragging Stage 0 to
+# 60s+, long enough for Streamlit Cloud to drop the WebSocket and rerun).
+_OPENALEX_MAILTO = os.environ.get("CONTACT_EMAIL", "").strip() or "council-of-ai@users.noreply.github.com"
+
 
 def _search_openalex(
     query: str,
@@ -226,14 +234,13 @@ def _search_openalex(
         filters.append(f"to_publication_date:{int(year_to)}-12-31")
     if filters:
         params["filter"] = ",".join(filters)
-    email = os.environ.get("CONTACT_EMAIL", "")
-    if email:
-        params["mailto"] = email
+    params["mailto"] = _OPENALEX_MAILTO
 
     try:
         resp = requests.get(
-            _OA_URL, params=params, timeout=12,
-            headers={"Accept": "application/json"},
+            _OA_URL, params=params, timeout=8,
+            headers={"Accept": "application/json",
+                     "User-Agent": f"council-of-ai (mailto:{_OPENALEX_MAILTO})"},
         )
         resp.raise_for_status()
         works = resp.json().get("results", [])
@@ -578,14 +585,17 @@ def search_academic_papers(
     #   PubMed           : first EN query only (biomedical)
     #   OpenAlex         : EN + QL queries
     #   Google Scholar   : QL queries + first EN query
+    # OpenAlex is the broadest multilingual source but throttles when too many
+    # concurrent requests come from one IP, so its fan-out is capped (2 EN + 1 QL)
+    # to keep Stage 0 fast; the other engines stay cheap.
     jobs: List[Tuple[str, str]] = []
     for q in en_q:
         jobs.append(("Semantic Scholar", q))
     if en_q:
         jobs.append(("PubMed", en_q[0]))
-    for q in en_q:
+    for q in en_q[:2]:
         jobs.append(("OpenAlex", q))
-    for q in ql_q:
+    for q in ql_q[:1]:
         jobs.append(("OpenAlex", q))
     for q in ql_q:
         jobs.append(("Google Scholar", q))
